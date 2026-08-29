@@ -21,13 +21,26 @@ const PORT = process.env.PORT || 5001;
 // Connect MongoDB "pulsR" database
 connectDB();
 
-// Enable CORS & JSON parsing
-app.use(cors());
+// Enable CORS for all REST API routes
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Range']
+}));
 app.use(express.json());
 
-// Serve uploads statically at /uploads
+// Serve static audio uploads with explicit CORS & Range headers for mobile streaming
 const uploadsDir = path.join(__dirname, '../uploads');
-app.use('/uploads', express.static(uploadsDir));
+app.use('/uploads', (req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Range');
+  res.header('Access-Control-Expose-Headers', 'Content-Length, Content-Range');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+}, express.static(uploadsDir));
 
 // Mount REST API routes
 app.use('/api', uploadRouter);

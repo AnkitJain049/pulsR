@@ -38,7 +38,27 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
     audio.addEventListener('timeupdate', handleTimeUpdate);
     audio.addEventListener('ended', handleEnded);
 
+    // Global touch/click event listener to unlock mobile browser audio restrictions
+    const unlockMobileAudio = () => {
+      if (audioRef.current) {
+        // Silent play attempt to register user gesture
+        audioRef.current.play().then(() => {
+          if (playback && !playback.isPlaying) {
+            audioRef.current.pause();
+          }
+        }).catch(() => {});
+      }
+      if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+        audioCtxRef.current.resume().catch(() => {});
+      }
+    };
+
+    window.addEventListener('touchstart', unlockMobileAudio, { passive: true });
+    window.addEventListener('click', unlockMobileAudio, { passive: true });
+
     return () => {
+      window.removeEventListener('touchstart', unlockMobileAudio);
+      window.removeEventListener('click', unlockMobileAudio);
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
       audio.removeEventListener('timeupdate', handleTimeUpdate);
       audio.removeEventListener('ended', handleEnded);
@@ -91,8 +111,7 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
         }
 
         const drift = Math.abs(audio.currentTime - expectedCurrentTime);
-        if (drift > 0.05 || audio.paused) {
-          setSyncStatus('Syncing...');
+        if (drift > 0.1 || audio.paused) {
           audio.currentTime = Math.max(0, expectedCurrentTime);
         }
 
@@ -104,7 +123,7 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
             await audio.play();
             setSyncStatus('In Sync');
           } catch (err) {
-            console.warn('Audio playback waiting for user interaction:', err);
+            console.warn('Audio playback waiting for mobile touch unlock:', err);
             setSyncStatus('Click to unlock audio sync');
           }
         } else {
@@ -116,7 +135,7 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
         }
         setSyncStatus('Paused');
         const drift = Math.abs(audio.currentTime - trackOffset);
-        if (drift > 0.05) {
+        if (drift > 0.1) {
           audio.currentTime = Math.max(0, trackOffset);
         }
       }
@@ -124,7 +143,7 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
 
     syncPlayback();
 
-    const intervalId = setInterval(syncPlayback, 1000);
+    const intervalId = setInterval(syncPlayback, 500);
     return () => clearInterval(intervalId);
   }, [playback, track, serverTimeOffset, duration]);
 
@@ -165,17 +184,26 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
     const audio = audioRef.current;
     if (!audio || !playback) return;
 
+    if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+      audioCtxRef.current.resume().catch(console.warn);
+    }
+
     const { isPlaying, trackOffset, serverStartTime } = playback;
     if (isPlaying && serverStartTime > 0) {
       const serverNow = Date.now() + serverTimeOffset;
       const elapsedSeconds = (serverNow - serverStartTime) / 1000;
       audio.currentTime = Math.max(0, trackOffset + elapsedSeconds);
-      audio.play().catch(console.warn);
+      audio.play().then(() => {
+        setSyncStatus('In Sync');
+      }).catch(err => {
+        console.warn('Manual resync play error:', err);
+        setSyncStatus('Click to unlock audio sync');
+      });
     } else {
       audio.currentTime = Math.max(0, trackOffset);
       audio.pause();
+      setSyncStatus('Paused');
     }
-    setSyncStatus('In Sync');
   }, [playback, serverTimeOffset]);
 
   return {
