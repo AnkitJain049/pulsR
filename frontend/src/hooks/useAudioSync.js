@@ -115,6 +115,22 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
       if (isPlaying && serverStartTime > 0) {
         // Unified Unix Epoch Time Sync
         const serverNow = Date.now() + serverTimeOffset;
+        const timeUntilStartMs = serverStartTime - serverNow;
+
+        // If target start time is in the future, hold at trackOffset until target moment arrives
+        if (timeUntilStartMs > 0) {
+          if (audio.readyState >= 1) {
+            try {
+              audio.currentTime = Math.max(0, trackOffset);
+            } catch (e) {}
+          }
+          if (!audio.paused) {
+            audio.pause();
+          }
+          setSyncStatus(`Syncing (${Math.ceil(timeUntilStartMs)}ms)...`);
+          return;
+        }
+
         const elapsedSeconds = Math.max(0, (serverNow - serverStartTime) / 1000);
         const expectedCurrentTime = trackOffset + elapsedSeconds;
 
@@ -130,9 +146,7 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
           if (drift > 0.15 || audio.paused) {
             try {
               audio.currentTime = Math.max(0, expectedCurrentTime);
-            } catch (e) {
-              // Ignore safe readyState exceptions
-            }
+            } catch (e) {}
           }
         }
 
@@ -168,7 +182,7 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
 
     syncPlayback();
 
-    const intervalId = setInterval(syncPlayback, 300);
+    const intervalId = setInterval(syncPlayback, 250);
     return () => clearInterval(intervalId);
   }, [playback, track, serverTimeOffset, duration]);
 
