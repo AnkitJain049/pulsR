@@ -11,6 +11,7 @@ import { connectDB } from './db.js';
 import uploadRouter from './routes/upload.js';
 import roomsRouter from './routes/rooms.js';
 import { setupWebSocketHandler } from './wsHandler.js';
+import { cleanupOrphanedUploads } from './roomManager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -55,6 +56,10 @@ app.get('/api/health', (req, res) => {
     time: new Date().toISOString()
   });
 });
+
+// Run orphaned audio upload cleanup on startup and every 1 hour
+cleanupOrphanedUploads();
+setInterval(cleanupOrphanedUploads, 60 * 60 * 1000);
 
 // Create HTTP Server
 const server = http.createServer(app);

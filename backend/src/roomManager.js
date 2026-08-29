@@ -1,8 +1,60 @@
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { generateRoomCode, generateFunnyUsername } from './utils.js';
 import { Room as RoomModel } from './models/Room.js';
+import { Track as TrackModel } from './models/Track.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const uploadsDir = path.join(__dirname, '../uploads');
 
 /**
- * Ephemeral In-Memory Room State Manager with MongoDB Persistence & 12-Hour Auto Expiration
+ * Delete a physical audio file from backend/uploads/ disk
+ */
+export function deleteTrackFile(filename) {
+  if (!filename) return;
+  try {
+    const filePath = path.join(uploadsDir, filename);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      console.log(`🗑️ Deleted track file from disk: ${filename}`);
+    }
+  } catch (err) {
+    console.error(`Failed to delete track file ${filename}:`, err);
+  }
+}
+
+/**
+ * Cleanup any orphaned audio files in uploads/ that are not linked to any active room or MongoDB record
+ */
+export async function cleanupOrphanedUploads() {
+  try {
+    if (!fs.existsSync(uploadsDir)) return;
+    const diskFiles = fs.readdirSync(uploadsDir);
+    
+    // Get all active filenames in MongoDB
+    const activeRooms = await RoomModel.find({ 'track.filename': { $exists: true } }).select('track.filename');
+    const activeTracks = await TrackModel.find().select('filename');
+    
+    const activeFilenames = new Set([
+      ...activeRooms.map(r => r.track?.filename).filter(Boolean),
+      ...activeTracks.map(t => t.filename).filter(Boolean)
+    ]);
+
+    for (const file of diskFiles) {
+      if (file === '.gitkeep') continue;
+      if (!activeFilenames.has(file)) {
+        deleteTrackFile(file);
+      }
+    }
+  } catch (err) {
+    console.error('Orphaned upload cleanup warning:', err);
+  }
+}
+
+/**
+ * Ephemeral In-Memory Room State Manager with MongoDB Persistence & Auto Disk Cleanup
  */
 class RoomManager {
   constructor() {
@@ -183,14 +235,26 @@ class RoomManager {
   }
 
   /**
-   * Permanently delete room from MongoDB and RAM (Host Discard Action)
+   * Permanently delete room from MongoDB & RAM, and unlink physical audio file from disk
    */
   async deleteRoom(roomId) {
     if (!roomId) return null;
     const cleanId = roomId.trim().toUpperCase();
     const room = this.getRoom(cleanId);
 
+    // Delete associated physical audio file from disk
+    if (room?.track?.filename) {
+      deleteTrackFile(room.track.filename);
+    }
+
     try {
+      const dbRoom = await RoomModel.findOne({ roomId: cleanId });
+      if (dbRoom?.track?.filename) {
+        deleteTrackFile(dbRoom.track.filename);
+        try {
+          await TrackModel.deleteOne({ filename: dbRoom.track.filename });
+        } catch (tErr) {}
+      }
       await RoomModel.deleteOne({ roomId: cleanId });
     } catch (err) {
       console.error('Error deleting room from MongoDB:', err);
@@ -204,11 +268,19 @@ class RoomManager {
   }
 
   /**
-   * Update room track info
+   * Update room track info & delete previous track file from disk
    */
   setRoomTrack(roomId, trackInfo) {
     const room = this.getRoom(roomId);
     if (!room) return null;
+
+    // Delete previous audio file if replaced
+    if (room.track?.filename && room.track.filename !== trackInfo.filename) {
+      deleteTrackFile(room.track.filename);
+      try {
+        TrackModel.deleteOne({ filename: room.track.filename }).catch(() => {});
+      } catch (e) {}
+    }
 
     room.track = trackInfo;
     room.playback = {
