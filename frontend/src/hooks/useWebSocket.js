@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { WS_URL } from '../utils/config';
 
 // Get or auto-generate persistent sessionId from localStorage
 function getStoredSessionId() {
@@ -29,11 +30,7 @@ export function useWebSocket() {
 
   // Connect to WebSocket Server
   useEffect(() => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.hostname || 'localhost';
-    const wsUrl = `${protocol}//${host}:5001`;
-
-    const ws = new WebSocket(wsUrl);
+    const ws = new WebSocket(WS_URL);
     socketRef.current = ws;
 
     ws.onopen = () => {

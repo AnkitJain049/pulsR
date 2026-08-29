@@ -1,5 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { Play, Pause, Upload, Volume2, VolumeX, Copy, Check, Sliders, AlertCircle, Info } from 'lucide-react';
+import { BACKEND_URL } from '../utils/config';
 
 export function Player({
   role,
@@ -47,8 +48,7 @@ export function Player({
     formData.append('audio', file);
 
     try {
-      const host = window.location.hostname || 'localhost';
-      const response = await fetch(`http://${host}:5001/api/rooms/${roomState.id}/track`, {
+      const response = await fetch(`${BACKEND_URL}/api/rooms/${roomState.id}/track`, {
         method: 'POST',
         body: formData
       });
@@ -260,7 +260,6 @@ export function Player({
               <Sliders className="w-3.5 h-3.5 text-[#c1ff72]" />
               <span>Bluetooth Calibration</span>
               
-              {/* Info Icon with Hover Tooltip */}
               <div className="relative group inline-flex items-center">
                 <Info className="w-3.5 h-3.5 text-zinc-400 hover:text-[#c1ff72] cursor-pointer transition" />
                 <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 p-3 bg-black/95 text-zinc-200 text-[11px] font-normal leading-relaxed rounded-xl border border-white/20 shadow-2xl opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity duration-200 z-50">

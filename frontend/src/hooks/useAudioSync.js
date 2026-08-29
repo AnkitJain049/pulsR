@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { BACKEND_URL } from '../utils/config';
 
 export function useAudioSync(track, playback, serverTimeOffset = 0) {
   const audioRef = useRef(null);
@@ -11,7 +12,7 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
   const [isAudioReady, setIsAudioReady] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [volume, setVolume] = useState(1.0);
-  const [syncStatus, setSyncStatus] = useState('In Sync'); // 'In Sync', 'Syncing...', 'Paused'
+  const [syncStatus, setSyncStatus] = useState('In Sync');
 
   // Initialize HTML5 Audio Element & Web Audio API Analyser
   useEffect(() => {
@@ -52,11 +53,9 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
     if (!audio) return;
 
     if (track?.url) {
-      // Build full URL using window.location.hostname for local Wi-Fi multi-device compatibility
-      const host = window.location.hostname || 'localhost';
       const fullUrl = track.url.startsWith('http')
         ? track.url
-        : `http://${host}:5001${track.url}`;
+        : `${BACKEND_URL}${track.url}`;
 
       if (audio.src !== fullUrl) {
         setIsAudioReady(false);
@@ -85,14 +84,12 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
         const elapsedSeconds = (serverNow - serverStartTime) / 1000;
         const expectedCurrentTime = trackOffset + elapsedSeconds;
 
-        // Check if track is within valid length
         if (duration > 0 && expectedCurrentTime >= duration) {
           audio.pause();
           setSyncStatus('Ended');
           return;
         }
 
-        // Drift check threshold: 0.05 seconds (50ms)
         const drift = Math.abs(audio.currentTime - expectedCurrentTime);
         if (drift > 0.05 || audio.paused) {
           setSyncStatus('Syncing...');
@@ -101,7 +98,6 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
 
         if (audio.paused) {
           try {
-            // Web Audio Context unlock on browser interaction
             if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
               await audioCtxRef.current.resume();
             }
@@ -115,7 +111,6 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
           setSyncStatus('In Sync');
         }
       } else {
-        // Paused state
         if (!audio.paused) {
           audio.pause();
         }
@@ -129,7 +124,6 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
 
     syncPlayback();
 
-    // Continuous drift check loop every 1 second during active playback
     const intervalId = setInterval(syncPlayback, 1000);
     return () => clearInterval(intervalId);
   }, [playback, track, serverTimeOffset, duration]);
@@ -142,7 +136,7 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
     }
   }, [volume, isMuted]);
 
-  // Setup Web Audio API Analyser Node for Audio Visualizer
+  // Setup Web Audio API Analyser Node
   const setupWebAudioAnalyser = useCallback(() => {
     if (!audioRef.current || audioCtxRef.current) return analyserRef.current;
 
