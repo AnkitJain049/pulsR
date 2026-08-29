@@ -213,8 +213,8 @@ export function setupWebSocketHandler(wss) {
             }
 
             const offset = payload?.trackOffset ?? room.playback.trackOffset;
-            // Schedule playback target 1000ms (1 second) in the future for global cloud sync
-            const futureStartTime = Date.now() + 1000;
+            // Schedule playback target 500ms in the future for global cloud sync
+            const futureStartTime = Date.now() + 500;
 
             roomManager.updatePlayback(currentRoomId, {
               isPlaying: true,
@@ -266,7 +266,7 @@ export function setupWebSocketHandler(wss) {
             }
 
             const offset = payload?.trackOffset ?? 0;
-            const futureStartTime = room.playback.isPlaying ? (Date.now() + 1000) : 0;
+            const futureStartTime = room.playback.isPlaying ? (Date.now() + 500) : 0;
 
             roomManager.updatePlayback(currentRoomId, {
               isPlaying: room.playback.isPlaying,
@@ -275,6 +275,33 @@ export function setupWebSocketHandler(wss) {
             });
 
             broadcastRoomState(room);
+            break;
+          }
+
+          case 'DISCARD_ROOM':
+          case 'DELETE_ROOM': {
+            if (!currentRoomId) break;
+            const room = roomManager.getRoom(currentRoomId);
+            if (!room) break;
+
+            const clientData = room.clients.get(socket);
+            if (clientData?.role !== 'ADMIN' && clientData?.role !== 'admin') {
+              socket.send(JSON.stringify({
+                type: 'ERROR',
+                payload: { message: 'Only the room host can discard the room.' }
+              }));
+              break;
+            }
+
+            // 1. Broadcast ROOM_DISCARDED to ALL sockets in the room before deletion
+            broadcastToRoom(room, {
+              type: 'ROOM_DISCARDED',
+              payload: { message: 'Host has discarded this room.' }
+            });
+
+            // 2. Permanently delete room from MongoDB and RAM
+            await roomManager.deleteRoom(currentRoomId);
+            currentRoomId = null;
             break;
           }
 

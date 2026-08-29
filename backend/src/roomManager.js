@@ -183,6 +183,27 @@ class RoomManager {
   }
 
   /**
+   * Permanently delete room from MongoDB and RAM (Host Discard Action)
+   */
+  async deleteRoom(roomId) {
+    if (!roomId) return null;
+    const cleanId = roomId.trim().toUpperCase();
+    const room = this.getRoom(cleanId);
+
+    try {
+      await RoomModel.deleteOne({ roomId: cleanId });
+    } catch (err) {
+      console.error('Error deleting room from MongoDB:', err);
+    }
+
+    if (room) {
+      this.rooms.delete(cleanId);
+    }
+
+    return room;
+  }
+
+  /**
    * Update room track info
    */
   setRoomTrack(roomId, trackInfo) {

@@ -1,8 +1,19 @@
-import React from 'react';
-import { Smartphone, Crown, LogOut, Users } from 'lucide-react';
+import React, { useState } from 'react';
+import { Smartphone, Crown, LogOut, Users, Trash2 } from 'lucide-react';
 
-export function DeviceList({ roomState, session, leaveRoom }) {
+export function DeviceList({ roomState, session, role, leaveRoom, discardRoom }) {
   const clients = roomState?.clients || [];
+  const isAdmin = role === 'ADMIN' || role === 'admin';
+  const [showConfirm, setShowConfirm] = useState(false);
+
+  const handleDiscardClick = () => {
+    if (showConfirm) {
+      discardRoom();
+    } else {
+      setShowConfirm(true);
+      setTimeout(() => setShowConfirm(false), 4000);
+    }
+  };
 
   return (
     <div className="apple-glass rounded-3xl p-6 border border-white/10 h-full flex flex-col">
@@ -15,20 +26,36 @@ export function DeviceList({ roomState, session, leaveRoom }) {
             Connected Devices ({clients.length})
           </h4>
         </div>
-        <button
-          onClick={leaveRoom}
-          className="flex items-center space-x-1 px-3 py-1 rounded-full bg-red-500/10 text-red-400 border border-red-500/20 text-xs font-medium hover:bg-red-500/20 transition"
-        >
-          <LogOut className="w-3 h-3" />
-          <span>Leave</span>
-        </button>
+
+        {isAdmin ? (
+          <button
+            onClick={handleDiscardClick}
+            className={`flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-semibold transition border ${
+              showConfirm
+                ? 'bg-red-600 text-white border-red-500 shadow-red-500/50 animate-pulse'
+                : 'bg-red-500/10 text-red-400 border-red-500/20 hover:bg-red-500/20'
+            }`}
+            title="Permanently delete room from MongoDB and kick all listeners"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>{showConfirm ? 'Confirm Discard?' : 'Discard Room'}</span>
+          </button>
+        ) : (
+          <button
+            onClick={leaveRoom}
+            className="flex items-center space-x-1 px-3 py-1 rounded-full bg-red-500/10 text-red-400 border border-red-500/20 text-xs font-medium hover:bg-red-500/20 transition"
+          >
+            <LogOut className="w-3 h-3" />
+            <span>Leave</span>
+          </button>
+        )}
       </div>
 
       {/* Tall Scrollable Device Roster */}
       <div className="space-y-2.5 flex-1 max-h-[580px] overflow-y-auto pr-1">
         {clients.map((client, idx) => {
           const isYou = client.sessionId === session.sessionId;
-          const isAdmin = client.role === 'ADMIN' || client.role === 'admin';
+          const isClientAdmin = client.role === 'ADMIN' || client.role === 'admin';
 
           return (
             <div
@@ -39,9 +66,9 @@ export function DeviceList({ roomState, session, leaveRoom }) {
             >
               <div className="flex items-center space-x-3">
                 <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
-                  isAdmin ? 'bg-[#c1ff72] text-black font-bold' : 'bg-zinc-800 text-zinc-400'
+                  isClientAdmin ? 'bg-[#c1ff72] text-black font-bold' : 'bg-zinc-800 text-zinc-400'
                 }`}>
-                  {isAdmin ? <Crown className="w-4 h-4 fill-current" /> : <Smartphone className="w-4 h-4" />}
+                  {isClientAdmin ? <Crown className="w-4 h-4 fill-current" /> : <Smartphone className="w-4 h-4" />}
                 </div>
 
                 <div>
@@ -56,15 +83,15 @@ export function DeviceList({ roomState, session, leaveRoom }) {
                     )}
                   </div>
                   <span className="text-[11px] text-zinc-500">
-                    {isAdmin ? 'Host' : 'Listener'}
+                    {isClientAdmin ? 'Host' : 'Listener'}
                   </span>
                 </div>
               </div>
 
               <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full shrink-0 ${
-                isAdmin ? 'bg-[#c1ff72] text-black' : 'bg-zinc-800 text-zinc-400'
+                isClientAdmin ? 'bg-[#c1ff72] text-black' : 'bg-zinc-800 text-zinc-400'
               }`}>
-                {isAdmin ? 'HOST' : 'LISTENER'}
+                {isClientAdmin ? 'HOST' : 'LISTENER'}
               </span>
             </div>
           );

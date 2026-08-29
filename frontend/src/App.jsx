@@ -21,6 +21,7 @@ export default function App() {
     createRoom,
     joinRoom,
     leaveRoom,
+    discardRoom,
     updateTrack,
     playTrack,
     pauseTrack,
@@ -111,7 +112,9 @@ export default function App() {
               <DeviceList
                 roomState={roomState}
                 session={session}
+                role={role}
                 leaveRoom={leaveRoom}
+                discardRoom={discardRoom}
               />
             </div>
 

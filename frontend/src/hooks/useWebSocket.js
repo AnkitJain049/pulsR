@@ -172,6 +172,13 @@ export function useWebSocket() {
             break;
           }
 
+          case 'ROOM_DISCARDED': {
+            setRoomState(null);
+            setRole(null);
+            setError(payload?.message || 'The host has discarded this room.');
+            break;
+          }
+
           case 'ROOM_LEFT': {
             setRoomState(null);
             setRole(null);
@@ -236,6 +243,12 @@ export function useWebSocket() {
     }
   }, []);
 
+  const discardRoom = useCallback(() => {
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify({ type: 'DISCARD_ROOM' }));
+    }
+  }, []);
+
   const updateTrack = useCallback((track) => {
     if (socketRef.current?.readyState === WebSocket.OPEN) {
       socketRef.current.send(JSON.stringify({
@@ -296,6 +309,7 @@ export function useWebSocket() {
     createRoom,
     joinRoom,
     leaveRoom,
+    discardRoom,
     updateTrack,
     playTrack,
     pauseTrack,
