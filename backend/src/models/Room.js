@@ -17,7 +17,11 @@ const roomSchema = new mongoose.Schema({
     serverStartTime: { type: Number, default: 0 }
   },
   activeClientsCount: { type: Number, default: 1 },
-  lastActiveAt: { type: Date, default: Date.now }
+  lastActiveAt: { 
+    type: Date, 
+    default: Date.now, 
+    expires: 43200 // 12 Hours TTL index: MongoDB automatically purges rooms after 12 hours of inactivity
+  }
 }, {
   timestamps: true
 });

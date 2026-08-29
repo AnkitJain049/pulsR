@@ -2,7 +2,7 @@ import { generateRoomCode, generateFunnyUsername } from './utils.js';
 import { Room as RoomModel } from './models/Room.js';
 
 /**
- * Ephemeral In-Memory Room State Manager with MongoDB Persistence
+ * Ephemeral In-Memory Room State Manager with MongoDB Persistence & 12-Hour Auto Expiration
  */
 class RoomManager {
   constructor() {
@@ -30,6 +30,38 @@ class RoomManager {
     } catch (err) {
       // Non-blocking warning if MongoDB server is offline
     }
+  }
+
+  /**
+   * Restore room from MongoDB if evicted from RAM but still active within 12 hours
+   */
+  async restoreFromDatabase(roomId) {
+    if (!roomId) return null;
+    const cleanId = roomId.trim().toUpperCase();
+
+    // Return if already in RAM
+    if (this.rooms.has(cleanId)) {
+      return this.rooms.get(cleanId);
+    }
+
+    try {
+      const dbRoom = await RoomModel.findOne({ roomId: cleanId });
+      if (dbRoom) {
+        const restoredRoom = {
+          id: dbRoom.roomId,
+          adminSessionId: dbRoom.adminSessionId,
+          clients: new Map(),
+          track: dbRoom.track || null,
+          playback: dbRoom.playback || { isPlaying: false, trackOffset: 0, serverStartTime: 0 }
+        };
+        this.rooms.set(cleanId, restoredRoom);
+        return restoredRoom;
+      }
+    } catch (err) {
+      // Fallback
+    }
+
+    return null;
   }
 
   /**
@@ -65,7 +97,7 @@ class RoomManager {
   }
 
   /**
-   * Find a room by ID
+   * Find a room by ID in RAM
    * @param {string} roomId 
    * @returns {Object|null}
    */
@@ -76,15 +108,19 @@ class RoomManager {
   }
 
   /**
-   * Join a room
+   * Join a room (checks RAM, then MongoDB if evicted)
    * @param {string} roomId 
    * @param {WebSocket} socket 
    * @param {string} sessionId 
    * @param {string} [customUsername] 
-   * @returns {Object|null} { room, clientData }
+   * @returns {Promise<Object|null>} { room, clientData }
    */
-  joinRoom(roomId, socket, sessionId, customUsername) {
-    const room = this.getRoom(roomId);
+  async joinRoom(roomId, socket, sessionId, customUsername) {
+    let room = this.getRoom(roomId);
+    if (!room) {
+      // Attempt restoration from MongoDB if evicted from RAM
+      room = await this.restoreFromDatabase(roomId);
+    }
     if (!room) return null;
 
     // Generate unique room username if not provided
@@ -130,7 +166,7 @@ class RoomManager {
 
         this.syncToDatabase(room);
 
-        // Gracefully clean up empty rooms after 5 minutes of inactivity
+        // Gracefully clean up empty rooms after 5 minutes of inactivity in RAM
         if (room.clients.size === 0) {
           setTimeout(() => {
             const currentRoom = this.rooms.get(roomId);

@@ -63,7 +63,7 @@ export function setupWebSocketHandler(wss) {
       payload: { sessionId, username }
     }));
 
-    socket.on('message', (data) => {
+    socket.on('message', async (data) => {
       try {
         const message = JSON.parse(data.toString());
         const { type, payload } = message;
@@ -90,16 +90,16 @@ export function setupWebSocketHandler(wss) {
             if (payload?.sessionId) sessionId = payload.sessionId;
             if (payload?.username) username = payload.username;
 
-            const room = roomManager.getRoom(reqRoomId);
-            if (!room) {
+            const joinResult = await roomManager.joinRoom(reqRoomId, socket, sessionId, username);
+            if (!joinResult) {
               socket.send(JSON.stringify({
                 type: 'ERROR',
-                payload: { message: `Room "${reqRoomId}" not found.` }
+                payload: { message: `Room "${reqRoomId}" not found or expired.` }
               }));
               break;
             }
 
-            const joinResult = roomManager.joinRoom(reqRoomId, socket, sessionId, username);
+            const room = joinResult.room;
             currentRoomId = room.id;
             const assignedRole = joinResult.clientData.role;
             const assignedUsername = joinResult.clientData.username;
@@ -115,7 +115,7 @@ export function setupWebSocketHandler(wss) {
               }
             }));
 
-            // Also send ROOM_JOINED for backward compatibility
+            // Also send ROOM_JOINED
             socket.send(JSON.stringify({
               type: 'ROOM_JOINED',
               payload: {
@@ -135,7 +135,7 @@ export function setupWebSocketHandler(wss) {
             if (payload?.sessionId) sessionId = payload.sessionId;
 
             const room = roomManager.createRoom(sessionId);
-            const joinResult = roomManager.joinRoom(room.id, socket, sessionId, username);
+            const joinResult = await roomManager.joinRoom(room.id, socket, sessionId, username);
             currentRoomId = room.id;
             const formattedRoom = roomManager.formatRoomState(room);
 
