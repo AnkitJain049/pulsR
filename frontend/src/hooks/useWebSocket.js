@@ -46,12 +46,12 @@ export function useWebSocket() {
         }));
       }
 
-      // Start periodic latency sync ping every 2 seconds
+      // Start periodic latency sync ping every 2 seconds using Date.now() ms
       pingIntervalRef.current = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({
             type: 'SYNC_PING',
-            clientSendTime: performance.now(),
+            clientSendTime: Date.now(),
             payload: { clientTime: Date.now() }
           }));
         }
@@ -120,7 +120,7 @@ export function useWebSocket() {
           case 'SYNC_PONG': {
             const now = Date.now();
             const clientSendTime = payload?.clientTime || msg.clientSendTime || now;
-            const rtt = now - clientSendTime;
+            const rtt = Math.max(0, now - clientSendTime);
             const currentLatency = Math.round(rtt / 2);
             setLatency(currentLatency);
 

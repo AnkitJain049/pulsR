@@ -38,10 +38,9 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
     audio.addEventListener('timeupdate', handleTimeUpdate);
     audio.addEventListener('ended', handleEnded);
 
-    // Global touch/click event listener to unlock mobile browser audio restrictions
-    const unlockMobileAudio = () => {
-      if (audioRef.current) {
-        // Silent play attempt to register user gesture
+    // Global touch/click event listener to unlock browser audio restrictions on both mobile & desktop
+    const unlockAudio = () => {
+      if (audioRef.current && audioRef.current.src) {
         audioRef.current.play().then(() => {
           if (playback && !playback.isPlaying) {
             audioRef.current.pause();
@@ -53,12 +52,12 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
       }
     };
 
-    window.addEventListener('touchstart', unlockMobileAudio, { passive: true });
-    window.addEventListener('click', unlockMobileAudio, { passive: true });
+    window.addEventListener('touchstart', unlockAudio, { passive: true });
+    window.addEventListener('click', unlockAudio, { passive: true });
 
     return () => {
-      window.removeEventListener('touchstart', unlockMobileAudio);
-      window.removeEventListener('click', unlockMobileAudio);
+      window.removeEventListener('touchstart', unlockAudio);
+      window.removeEventListener('click', unlockAudio);
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
       audio.removeEventListener('timeupdate', handleTimeUpdate);
       audio.removeEventListener('ended', handleEnded);
@@ -73,9 +72,11 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
     if (!audio) return;
 
     if (track?.url) {
+      const cleanBackendUrl = BACKEND_URL.replace(/\/+$/, '');
+      const cleanTrackUrl = track.url.startsWith('/') ? track.url : `/${track.url}`;
       const fullUrl = track.url.startsWith('http')
         ? track.url
-        : `${BACKEND_URL}${track.url}`;
+        : `${cleanBackendUrl}${cleanTrackUrl}`;
 
       if (audio.src !== fullUrl) {
         setIsAudioReady(false);
@@ -99,9 +100,9 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
       const { isPlaying, trackOffset, serverStartTime } = playback;
 
       if (isPlaying && serverStartTime > 0) {
-        // High Precision Server Time calculation
+        // Unified Unix Epoch Time Sync
         const serverNow = Date.now() + serverTimeOffset;
-        const elapsedSeconds = (serverNow - serverStartTime) / 1000;
+        const elapsedSeconds = Math.max(0, (serverNow - serverStartTime) / 1000);
         const expectedCurrentTime = trackOffset + elapsedSeconds;
 
         if (duration > 0 && expectedCurrentTime >= duration) {
@@ -123,7 +124,7 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
             await audio.play();
             setSyncStatus('In Sync');
           } catch (err) {
-            console.warn('Audio playback waiting for mobile touch unlock:', err);
+            console.warn('Audio playback waiting for user interaction:', err);
             setSyncStatus('Click to unlock audio sync');
           }
         } else {
@@ -143,7 +144,7 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
 
     syncPlayback();
 
-    const intervalId = setInterval(syncPlayback, 500);
+    const intervalId = setInterval(syncPlayback, 300);
     return () => clearInterval(intervalId);
   }, [playback, track, serverTimeOffset, duration]);
 
@@ -191,7 +192,7 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
     const { isPlaying, trackOffset, serverStartTime } = playback;
     if (isPlaying && serverStartTime > 0) {
       const serverNow = Date.now() + serverTimeOffset;
-      const elapsedSeconds = (serverNow - serverStartTime) / 1000;
+      const elapsedSeconds = Math.max(0, (serverNow - serverStartTime) / 1000);
       audio.currentTime = Math.max(0, trackOffset + elapsedSeconds);
       audio.play().then(() => {
         setSyncStatus('In Sync');

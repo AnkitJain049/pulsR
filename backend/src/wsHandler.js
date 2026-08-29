@@ -70,16 +70,16 @@ export function setupWebSocketHandler(wss) {
 
         switch (type) {
           case 'SYNC_PING': {
-            const clientSendTime = payload?.clientSendTime || payload?.clientTime || Date.now();
-            const serverTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
+            const clientTime = payload?.clientTime || payload?.clientSendTime || msg.clientSendTime || Date.now();
+            const serverTime = Date.now(); // Unified Unix Epoch Timestamp (ms)
             
             socket.send(JSON.stringify({
               type: 'SYNC_PONG',
-              clientSendTime,
-              serverTime,
+              clientSendTime: clientTime,
+              serverTime: serverTime,
               payload: {
-                clientTime: clientSendTime,
-                serverTime: Date.now()
+                clientTime: clientTime,
+                serverTime: serverTime
               }
             }));
             break;

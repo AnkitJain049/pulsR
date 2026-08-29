@@ -48,7 +48,8 @@ export function Player({
     formData.append('audio', file);
 
     try {
-      const response = await fetch(`${BACKEND_URL}/api/rooms/${roomState.id}/track`, {
+      const cleanBackendUrl = BACKEND_URL.replace(/\/+$/, '');
+      const response = await fetch(`${cleanBackendUrl}/api/rooms/${roomState.id}/track`, {
         method: 'POST',
         body: formData
       });
@@ -95,7 +96,7 @@ export function Player({
   };
 
   const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
-  const isAudioLocked = syncStatus.includes('Click to unlock') || syncStatus.includes('suspended');
+  const isAudioLocked = syncStatus.includes('Click to unlock') || syncStatus.includes('suspended') || (!isAdmin && isPlaying && syncStatus !== 'In Sync');
 
   return (
     <div className="space-y-6">
@@ -130,17 +131,17 @@ export function Player({
 
       </div>
 
-      {/* 2. AUDIO UNLOCK OVERLAY */}
+      {/* 2. AUDIO UNLOCK OVERLAY FOR LISTENERS & MOBILE BROWSERS */}
       {isAudioLocked && (
         <div
           onClick={manualResync}
-          className="cursor-pointer p-4 rounded-2xl bg-[#c1ff72]/20 border border-[#c1ff72]/40 text-[#c1ff72] text-sm font-semibold flex items-center justify-between"
+          className="cursor-pointer p-4 rounded-2xl bg-[#c1ff72]/20 border border-[#c1ff72]/40 text-[#c1ff72] text-sm font-semibold flex items-center justify-between animate-pulse"
         >
           <div className="flex items-center space-x-2">
             <AlertCircle className="w-4 h-4" />
-            <span>Tap to Enable Sound</span>
+            <span>Tap Anywhere or Click Here to Enable Live Audio Stream</span>
           </div>
-          <span className="px-3 py-1 rounded-lg bg-[#c1ff72] text-black text-xs font-bold">Enable</span>
+          <span className="px-4 py-1.5 rounded-xl bg-[#c1ff72] text-black text-xs font-extrabold shadow-lime-glow">Enable Sound</span>
         </div>
       )}
 
@@ -160,7 +161,7 @@ export function Player({
 
           <div className="flex items-center space-x-2">
             <span className="text-xs px-3 py-1 rounded-full bg-zinc-900 border border-white/10 text-zinc-300 font-medium">
-              🟢 Synced (±2ms)
+              🟢 {syncStatus}
             </span>
           </div>
         </div>
@@ -230,9 +231,12 @@ export function Player({
                 {isPlaying ? <Pause className="w-6 h-6 fill-current" /> : <Play className="w-6 h-6 fill-current ml-0.5" />}
               </button>
             ) : (
-              <div className="px-4 py-2 rounded-full bg-zinc-900 text-xs text-zinc-400 border border-white/10">
-                {isPlaying ? 'Host is playing audio' : 'Waiting for host'}
-              </div>
+              <button
+                onClick={manualResync}
+                className="px-5 py-2.5 rounded-full bg-zinc-900 text-xs font-semibold text-[#c1ff72] border border-[#c1ff72]/30 hover:bg-zinc-800 transition"
+              >
+                {isPlaying ? '🔊 Synchronized with Host' : '⏸️ Host Paused Audio'}
+              </button>
             )}
           </div>
 
