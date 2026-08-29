@@ -1,0 +1,58 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-[#09090b] text-white selection:bg-[#c1ff72] selection:text-black overflow-x-hidden;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+}
+
+@layer utilities {
+  /* Apple Glassmorphism */
+  .apple-glass {
+    background: rgba(20, 20, 24, 0.7);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .apple-glass-hover {
+    transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .apple-glass-hover:hover {
+    background: rgba(30, 30, 36, 0.85);
+    border-color: rgba(193, 255, 114, 0.3);
+    transform: translateY(-1px);
+  }
+
+  /* Custom Glow Accents */
+  .glow-lime {
+    box-shadow: 0 0 30px -5px rgba(193, 255, 114, 0.3);
+  }
+  
+  .glow-lime-sm {
+    box-shadow: 0 0 15px -3px rgba(193, 255, 114, 0.25);
+  }
+
+  .text-glow {
+    text-shadow: 0 0 12px rgba(193, 255, 114, 0.5);
+  }
+}
+
+/* Custom sleek scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(9, 9, 11, 0.5);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(193, 255, 114, 0.4);
+}
