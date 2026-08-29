@@ -34,15 +34,21 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
       setSyncStatus('Ended');
     };
 
+    const handleError = (e) => {
+      console.error('Audio load error:', e, audio.error);
+      setSyncStatus('Error loading audio file');
+    };
+
     audio.addEventListener('loadedmetadata', handleLoadedMetadata);
     audio.addEventListener('timeupdate', handleTimeUpdate);
     audio.addEventListener('ended', handleEnded);
+    audio.addEventListener('error', handleError);
 
-    // Global touch/click event listener to unlock browser audio restrictions on both mobile & desktop
+    // Global touch/click event listener to unlock browser audio restrictions on mobile & desktop
     const unlockAudio = () => {
       if (audioRef.current && audioRef.current.src) {
         audioRef.current.play().then(() => {
-          if (playback && !playback.isPlaying) {
+          if (playbackRef.current && !playbackRef.current.isPlaying) {
             audioRef.current.pause();
           }
         }).catch(() => {});
@@ -61,10 +67,17 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
       audio.removeEventListener('timeupdate', handleTimeUpdate);
       audio.removeEventListener('ended', handleEnded);
+      audio.removeEventListener('error', handleError);
       audio.pause();
       audio.src = '';
     };
   }, []);
+
+  // Store latest playback in ref to prevent stale closures inside event handlers
+  const playbackRef = useRef(playback);
+  useEffect(() => {
+    playbackRef.current = playback;
+  }, [playback]);
 
   // Update track source when track changes
   useEffect(() => {
@@ -111,9 +124,16 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
           return;
         }
 
-        const drift = Math.abs(audio.currentTime - expectedCurrentTime);
-        if (drift > 0.1 || audio.paused) {
-          audio.currentTime = Math.max(0, expectedCurrentTime);
+        // Only set currentTime if audio metadata has loaded (readyState >= 1)
+        if (audio.readyState >= 1) {
+          const drift = Math.abs(audio.currentTime - expectedCurrentTime);
+          if (drift > 0.15 || audio.paused) {
+            try {
+              audio.currentTime = Math.max(0, expectedCurrentTime);
+            } catch (e) {
+              // Ignore safe readyState exceptions
+            }
+          }
         }
 
         if (audio.paused) {
@@ -124,7 +144,7 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
             await audio.play();
             setSyncStatus('In Sync');
           } catch (err) {
-            console.warn('Audio playback waiting for user interaction:', err);
+            console.warn('Audio playback waiting for user gesture unlock:', err);
             setSyncStatus('Click to unlock audio sync');
           }
         } else {
@@ -135,9 +155,13 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
           audio.pause();
         }
         setSyncStatus('Paused');
-        const drift = Math.abs(audio.currentTime - trackOffset);
-        if (drift > 0.1) {
-          audio.currentTime = Math.max(0, trackOffset);
+        if (audio.readyState >= 1) {
+          const drift = Math.abs(audio.currentTime - trackOffset);
+          if (drift > 0.15) {
+            try {
+              audio.currentTime = Math.max(0, trackOffset);
+            } catch (e) {}
+          }
         }
       }
     };
@@ -193,7 +217,11 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
     if (isPlaying && serverStartTime > 0) {
       const serverNow = Date.now() + serverTimeOffset;
       const elapsedSeconds = Math.max(0, (serverNow - serverStartTime) / 1000);
-      audio.currentTime = Math.max(0, trackOffset + elapsedSeconds);
+      if (audio.readyState >= 1) {
+        try {
+          audio.currentTime = Math.max(0, trackOffset + elapsedSeconds);
+        } catch (e) {}
+      }
       audio.play().then(() => {
         setSyncStatus('In Sync');
       }).catch(err => {
@@ -201,7 +229,11 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
         setSyncStatus('Click to unlock audio sync');
       });
     } else {
-      audio.currentTime = Math.max(0, trackOffset);
+      if (audio.readyState >= 1) {
+        try {
+          audio.currentTime = Math.max(0, trackOffset);
+        } catch (e) {}
+      }
       audio.pause();
       setSyncStatus('Paused');
     }
