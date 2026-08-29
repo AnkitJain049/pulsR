@@ -14,6 +14,11 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
   const [volume, setVolume] = useState(1.0);
   const [syncStatus, setSyncStatus] = useState('In Sync');
 
+  // Detect Mobile Operating System (iOS / Android) for tailored decoder thresholds
+  const isMobileRef = useRef(
+    typeof navigator !== 'undefined' && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
+  );
+
   // Initialize HTML5 Audio Element & Web Audio API Analyser
   useEffect(() => {
     const audio = new Audio();
@@ -44,8 +49,8 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
     audio.addEventListener('ended', handleEnded);
     audio.addEventListener('error', handleError);
 
-    // Global touch/click event listener to unlock browser audio restrictions on mobile & desktop
-    const unlockAudio = () => {
+    // Global touch/click event listener to unlock mobile browser audio restrictions on iOS Safari & Android
+    const unlockMobileAudio = () => {
       if (audioRef.current && audioRef.current.src) {
         audioRef.current.play().then(() => {
           if (playbackRef.current && !playbackRef.current.isPlaying) {
@@ -58,12 +63,12 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
       }
     };
 
-    window.addEventListener('touchstart', unlockAudio, { passive: true });
-    window.addEventListener('click', unlockAudio, { passive: true });
+    window.addEventListener('touchstart', unlockMobileAudio, { passive: true });
+    window.addEventListener('click', unlockMobileAudio, { passive: true });
 
     return () => {
-      window.removeEventListener('touchstart', unlockAudio);
-      window.removeEventListener('click', unlockAudio);
+      window.removeEventListener('touchstart', unlockMobileAudio);
+      window.removeEventListener('click', unlockMobileAudio);
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
       audio.removeEventListener('timeupdate', handleTimeUpdate);
       audio.removeEventListener('ended', handleEnded);
@@ -104,7 +109,7 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
     }
   }, [track]);
 
-  // Synchronize Playback State & Compensate Clock Drift
+  // Synchronize Playback State with Smooth PlaybackRate Steering (No Mobile Seeking Freezes!)
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio || !track || !playback) return;
@@ -113,7 +118,6 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
       const { isPlaying, trackOffset, serverStartTime } = playback;
 
       if (isPlaying && serverStartTime > 0) {
-        // Unified Unix Epoch Time Sync
         const serverNow = Date.now() + serverTimeOffset;
         const timeUntilStartMs = serverStartTime - serverNow;
 
@@ -122,6 +126,7 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
           if (audio.readyState >= 1) {
             try {
               audio.currentTime = Math.max(0, trackOffset);
+              audio.playbackRate = 1.0;
             } catch (e) {}
           }
           if (!audio.paused) {
@@ -140,13 +145,34 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
           return;
         }
 
-        // Only set currentTime if audio metadata has loaded (readyState >= 1)
+        const isMobile = isMobileRef.current;
+        const hardDriftThreshold = isMobile ? 0.6 : 0.3; // Hard seek threshold (600ms on mobile, 300ms on desktop)
+        const softDriftThreshold = 0.04; // 40ms threshold for smooth rate steering
+
         if (audio.readyState >= 1) {
-          const drift = Math.abs(audio.currentTime - expectedCurrentTime);
-          if (drift > 0.15 || audio.paused) {
+          const drift = audio.currentTime - expectedCurrentTime; // positive if ahead, negative if behind
+          const absDrift = Math.abs(drift);
+
+          if (absDrift > hardDriftThreshold || audio.paused) {
+            // Hard seek if wildly off or starting from pause
             try {
               audio.currentTime = Math.max(0, expectedCurrentTime);
+              audio.playbackRate = 1.0;
             } catch (e) {}
+          } else if (absDrift > softDriftThreshold) {
+            // Smooth PlaybackRate Steering to avoid mobile hardware decoder re-seek freezing
+            if (drift < 0) {
+              // Audio is behind: speed up slightly (+2.5% to +3.5%) to catch up smoothly
+              audio.playbackRate = isMobile ? 1.035 : 1.02;
+            } else {
+              // Audio is ahead: slow down slightly (-2.5% to -3.5%) to let timeline catch up
+              audio.playbackRate = isMobile ? 0.965 : 0.98;
+            }
+          } else {
+            // Perfectly in sync (under 40ms drift): lock to normal 1.0 speed
+            if (audio.playbackRate !== 1.0) {
+              audio.playbackRate = 1.0;
+            }
           }
         }
 
@@ -158,7 +184,7 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
             await audio.play();
             setSyncStatus('In Sync');
           } catch (err) {
-            console.warn('Audio playback waiting for user gesture unlock:', err);
+            console.warn('Audio playback waiting for mobile touch unlock:', err);
             setSyncStatus('Click to unlock audio sync');
           }
         } else {
@@ -170,8 +196,9 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
         }
         setSyncStatus('Paused');
         if (audio.readyState >= 1) {
+          audio.playbackRate = 1.0;
           const drift = Math.abs(audio.currentTime - trackOffset);
-          if (drift > 0.15) {
+          if (drift > 0.2) {
             try {
               audio.currentTime = Math.max(0, trackOffset);
             } catch (e) {}
@@ -182,7 +209,9 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
 
     syncPlayback();
 
-    const intervalId = setInterval(syncPlayback, 250);
+    // Run sync loop every 400ms on mobile (prevents mobile CPU throttling) or 250ms on desktop
+    const intervalMs = isMobileRef.current ? 400 : 250;
+    const intervalId = setInterval(syncPlayback, intervalMs);
     return () => clearInterval(intervalId);
   }, [playback, track, serverTimeOffset, duration]);
 
@@ -234,6 +263,7 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
       if (audio.readyState >= 1) {
         try {
           audio.currentTime = Math.max(0, trackOffset + elapsedSeconds);
+          audio.playbackRate = 1.0;
         } catch (e) {}
       }
       audio.play().then(() => {
@@ -246,6 +276,7 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
       if (audio.readyState >= 1) {
         try {
           audio.currentTime = Math.max(0, trackOffset);
+          audio.playbackRate = 1.0;
         } catch (e) {}
       }
       audio.pause();
