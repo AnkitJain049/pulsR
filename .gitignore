@@ -1,20 +1,20 @@
-# Node dependencies
+# Node Dependencies
 node_modules/
 backend/node_modules/
 frontend/node_modules/
 
-# Environment variables
+# Environment Variables
 .env
 .env.local
 .env.*.local
 backend/.env
 frontend/.env
 
-# Audio Uploads storage
+# Audio Storage Directory
 backend/uploads/*
 !backend/uploads/.gitkeep
 
-# Build and distribution outputs
+# Build and Production Artifacts
 dist/
 frontend/dist/
 build/
@@ -29,22 +29,19 @@ build/
 ehthumbs.db
 Thumbs.db
 
-# Logs and Debug outputs
+# Logs and Debug Output
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# IDEs and Editors
+# Editors & IDEs
 .vscode/
 .idea/
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
+*.swp
+*.swo
 
-# Temporary workspace files
+# Temporary Files
 tmp/
 .temp/
