@@ -27,6 +27,24 @@ export function useWebSocket() {
 
   const socketRef = useRef(null);
   const pingIntervalRef = useRef(null);
+  const syncSamplesRef = useRef([]); // Rolling buffer of last 15 RTT & Offset samples
+
+  // Trigger rapid burst of pings to lock high-precision clock sync quickly
+  const triggerRapidSync = useCallback((ws) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    let pings = 0;
+    const sendPing = () => {
+      if (pings >= 5 || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({
+        type: 'SYNC_PING',
+        clientSendTime: Date.now(),
+        payload: { clientTime: Date.now() }
+      }));
+      pings++;
+      if (pings < 5) setTimeout(sendPing, 50);
+    };
+    sendPing();
+  }, []);
 
   // Connect to WebSocket Server
   useEffect(() => {
@@ -46,7 +64,10 @@ export function useWebSocket() {
         }));
       }
 
-      // Start periodic latency sync ping every 2 seconds using Date.now() ms
+      // Initial rapid burst ping for fast clock lock
+      triggerRapidSync(ws);
+
+      // Periodic latency sync ping every 2 seconds
       pingIntervalRef.current = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({
@@ -85,6 +106,8 @@ export function useWebSocket() {
               setSession(prev => ({ ...prev, username: payload.username }));
             }
             setError(null);
+            // Trigger rapid sync when joining a room
+            if (socketRef.current) triggerRapidSync(socketRef.current);
             break;
           }
 
@@ -121,13 +144,31 @@ export function useWebSocket() {
             const now = Date.now();
             const clientSendTime = payload?.clientTime || msg.clientSendTime || now;
             const rtt = Math.max(0, now - clientSendTime);
-            const currentLatency = Math.round(rtt / 2);
+            const oneWayLatency = rtt / 2;
+            const currentLatency = Math.round(oneWayLatency);
             setLatency(currentLatency);
 
             const serverTime = payload?.serverTime || msg.serverTime || now;
-            const estimatedServerNow = serverTime + currentLatency;
-            const offset = estimatedServerNow - now;
-            setServerTimeOffset(offset);
+            const estimatedServerNow = serverTime + oneWayLatency;
+            const rawOffset = estimatedServerNow - now;
+
+            // Rolling buffer for Cristian's Algorithm outlier rejection
+            const samples = syncSamplesRef.current;
+            samples.push({ rtt, offset: rawOffset });
+            if (samples.length > 15) samples.shift();
+
+            // Cristian's Algorithm: Sort by RTT and average lowest 30% latency samples
+            const sortedByRtt = [...samples].sort((a, b) => a.rtt - b.rtt);
+            const bestCount = Math.max(1, Math.floor(sortedByRtt.length * 0.3));
+            const bestSamples = sortedByRtt.slice(0, bestCount);
+
+            const avgBestOffset = bestSamples.reduce((sum, s) => sum + s.offset, 0) / bestCount;
+
+            // Exponential Moving Average (EMA) smoothing to eliminate cloud jitter
+            setServerTimeOffset(prev => {
+              if (prev === 0) return avgBestOffset;
+              return Math.round(prev * 0.75 + avgBestOffset * 0.25);
+            });
             break;
           }
 
@@ -166,7 +207,7 @@ export function useWebSocket() {
         ws.close();
       }
     };
-  }, []);
+  }, [triggerRapidSync]);
 
   // Action methods
   const createRoom = useCallback(() => {

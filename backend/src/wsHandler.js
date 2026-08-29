@@ -213,9 +213,13 @@ export function setupWebSocketHandler(wss) {
             }
 
             const offset = payload?.trackOffset ?? room.playback.trackOffset;
+            // Schedule playback target 1000ms (1 second) in the future for global cloud sync
+            const futureStartTime = Date.now() + 1000;
+
             roomManager.updatePlayback(currentRoomId, {
               isPlaying: true,
-              trackOffset: offset
+              trackOffset: offset,
+              serverStartTime: futureStartTime
             });
 
             broadcastRoomState(room);
@@ -239,7 +243,8 @@ export function setupWebSocketHandler(wss) {
             const offset = payload?.trackOffset ?? room.playback.trackOffset;
             roomManager.updatePlayback(currentRoomId, {
               isPlaying: false,
-              trackOffset: offset
+              trackOffset: offset,
+              serverStartTime: 0
             });
 
             broadcastRoomState(room);
@@ -261,9 +266,12 @@ export function setupWebSocketHandler(wss) {
             }
 
             const offset = payload?.trackOffset ?? 0;
+            const futureStartTime = room.playback.isPlaying ? (Date.now() + 1000) : 0;
+
             roomManager.updatePlayback(currentRoomId, {
               isPlaying: room.playback.isPlaying,
-              trackOffset: offset
+              trackOffset: offset,
+              serverStartTime: futureStartTime
             });
 
             broadcastRoomState(room);

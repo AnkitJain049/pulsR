@@ -203,13 +203,13 @@ class RoomManager {
   /**
    * Update playback state (play/pause/seek)
    */
-  updatePlayback(roomId, { isPlaying, trackOffset }) {
+  updatePlayback(roomId, { isPlaying, trackOffset, serverStartTime }) {
     const room = this.getRoom(roomId);
     if (!room) return null;
 
     room.playback.isPlaying = isPlaying;
     room.playback.trackOffset = Math.max(0, trackOffset);
-    room.playback.serverStartTime = isPlaying ? Date.now() : 0;
+    room.playback.serverStartTime = isPlaying ? (serverStartTime || Date.now()) : 0;
 
     this.syncToDatabase(room);
     return room;
