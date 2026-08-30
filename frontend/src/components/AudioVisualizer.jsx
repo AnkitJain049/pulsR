@@ -1,6 +1,14 @@
 import React, { useEffect, useRef } from 'react';
 
-export function AudioVisualizer({ isPlaying, setupWebAudioAnalyser, analyserRef, streamerRef, isLiveBroadcast }) {
+export function AudioVisualizer({
+  isPlaying,
+  setupWebAudioAnalyser,
+  analyserRef,
+  streamerRef,
+  listenerAnalyserRef,
+  isLiveBroadcast,
+  isHost
+}) {
   const canvasRef = useRef(null);
   const animFrameRef = useRef(null);
 
@@ -29,10 +37,16 @@ export function AudioVisualizer({ isPlaying, setupWebAudioAnalyser, analyserRef,
 
       let analyser = analyserRef?.current;
       
-      // If Host Live Broadcast is active, get live system audio analyser
-      if (isLiveBroadcast && streamerRef?.current) {
-        const liveAnalyser = streamerRef.current.getLiveAnalyser();
-        if (liveAnalyser) analyser = liveAnalyser;
+      // Live Broadcast Mode Analyser Resolution
+      if (isLiveBroadcast) {
+        if (isHost && streamerRef?.current) {
+          // Host side system audio stream analyser
+          const liveAnalyser = streamerRef.current.getLiveAnalyser();
+          if (liveAnalyser) analyser = liveAnalyser;
+        } else if (!isHost && listenerAnalyserRef?.current) {
+          // Listener side live receiver Web Audio analyser
+          analyser = listenerAnalyserRef.current;
+        }
       }
 
       const barCount = 40;
@@ -100,7 +114,7 @@ export function AudioVisualizer({ isPlaying, setupWebAudioAnalyser, analyserRef,
       window.removeEventListener('resize', handleResize);
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     };
-  }, [isPlaying, isLiveBroadcast, setupWebAudioAnalyser, analyserRef, streamerRef]);
+  }, [isPlaying, isLiveBroadcast, isHost, setupWebAudioAnalyser, analyserRef, streamerRef, listenerAnalyserRef]);
 
   return (
     <div className="w-full apple-glass rounded-3xl p-5 border border-white/10">

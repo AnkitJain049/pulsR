@@ -73,13 +73,28 @@ function MainAppContent() {
   } = useAudioSync(track, playback, totalOffset);
 
   // Listener hook for receiving live audio chunks from Spotify/Apple Music capture
-  const { handleLiveChunk } = useLiveAudioStream(isLiveBroadcast && !isHost, roomState?.liveMimeType);
+  const { handleLiveChunk, listenerAnalyserRef, getAudioContext } = useLiveAudioStream(isLiveBroadcast && !isHost);
 
   useEffect(() => {
     if (latestLiveChunk?.chunk && isLiveBroadcast && !isHost) {
       handleLiveChunk(latestLiveChunk.chunk);
     }
   }, [latestLiveChunk, isLiveBroadcast, isHost, handleLiveChunk]);
+
+  // Global user gesture listener unlock for Web Audio AudioContext on listener devices
+  useEffect(() => {
+    const unlockListenerAudio = () => {
+      if (isLiveBroadcast && !isHost) {
+        getAudioContext();
+      }
+    };
+    window.addEventListener('touchstart', unlockListenerAudio, { passive: true });
+    window.addEventListener('click', unlockListenerAudio, { passive: true });
+    return () => {
+      window.removeEventListener('touchstart', unlockListenerAudio);
+      window.removeEventListener('click', unlockListenerAudio);
+    };
+  }, [isLiveBroadcast, isHost, getAudioContext]);
 
   const isPlaying = playback?.isPlaying || false;
 
@@ -201,9 +216,11 @@ function MainAppContent() {
               <AudioVisualizer
                 isPlaying={isPlaying}
                 isLiveBroadcast={isLiveBroadcast}
+                isHost={isHost}
                 setupWebAudioAnalyser={setupWebAudioAnalyser}
                 analyserRef={analyserRef}
                 streamerRef={streamerRef}
+                listenerAnalyserRef={listenerAnalyserRef}
               />
             </div>
 
