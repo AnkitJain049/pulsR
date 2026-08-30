@@ -179,6 +179,77 @@ export function setupWebSocketHandler(wss) {
             break;
           }
 
+          case 'START_LIVE_BROADCAST': {
+            if (!currentRoomId) break;
+            const room = roomManager.getRoom(currentRoomId);
+            if (!room) break;
+
+            const clientData = room.clients.get(socket);
+            if (clientData?.role !== 'ADMIN' && clientData?.role !== 'admin') {
+              socket.send(JSON.stringify({
+                type: 'ERROR',
+                payload: { message: 'Only the room host can start a live broadcast.' }
+              }));
+              break;
+            }
+
+            room.isLiveBroadcast = true;
+            room.liveMimeType = payload?.mimeType || 'audio/webm;codecs=opus';
+            room.playback.isPlaying = false; // Pause static track when live broadcast is active
+
+            broadcastToRoom(room, {
+              type: 'LIVE_BROADCAST_STARTED',
+              payload: {
+                mimeType: room.liveMimeType,
+                hostUsername: clientData.username
+              }
+            });
+
+            broadcastRoomState(room);
+            break;
+          }
+
+          case 'LIVE_AUDIO_CHUNK': {
+            if (!currentRoomId) break;
+            const room = roomManager.getRoom(currentRoomId);
+            if (!room || !room.isLiveBroadcast) break;
+
+            const clientData = room.clients.get(socket);
+            if (clientData?.role !== 'ADMIN' && clientData?.role !== 'admin') break;
+
+            const chunkMsg = JSON.stringify({
+              type: 'LIVE_AUDIO_CHUNK',
+              payload: {
+                chunk: payload.chunk,
+                mimeType: payload.mimeType,
+                timestamp: payload.timestamp
+              }
+            });
+
+            // Relay live audio chunk to all listener sockets in room
+            for (const clientSocket of room.clients.keys()) {
+              if (clientSocket !== socket && clientSocket.readyState === 1) {
+                clientSocket.send(chunkMsg);
+              }
+            }
+            break;
+          }
+
+          case 'STOP_LIVE_BROADCAST': {
+            if (!currentRoomId) break;
+            const room = roomManager.getRoom(currentRoomId);
+            if (!room) break;
+
+            room.isLiveBroadcast = false;
+
+            broadcastToRoom(room, {
+              type: 'LIVE_BROADCAST_STOPPED'
+            });
+
+            broadcastRoomState(room);
+            break;
+          }
+
           case 'UPDATE_TRACK': {
             if (!currentRoomId) break;
             const room = roomManager.getRoom(currentRoomId);
@@ -213,7 +284,6 @@ export function setupWebSocketHandler(wss) {
             }
 
             const offset = payload?.trackOffset ?? room.playback.trackOffset;
-            // Schedule playback target 500ms in the future for global cloud sync
             const futureStartTime = Date.now() + 500;
 
             roomManager.updatePlayback(currentRoomId, {

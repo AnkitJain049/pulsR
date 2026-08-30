@@ -40,7 +40,11 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
     };
 
     const handleError = (e) => {
-      console.error('Audio load error:', e, audio.error);
+      // Ignore initial empty src or unassigned track errors
+      if (!audio.getAttribute('src') || !audio.src || audio.src === window.location.href || audio.src.endsWith('/')) {
+        return;
+      }
+      console.warn('Audio load error:', e, audio.error);
       setSyncStatus('Error loading audio file');
     };
 
@@ -51,7 +55,7 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
 
     // Global touch/click event listener to unlock mobile browser audio restrictions on iOS Safari & Android
     const unlockMobileAudio = () => {
-      if (audioRef.current && audioRef.current.src) {
+      if (audioRef.current && audioRef.current.getAttribute('src')) {
         audioRef.current.play().then(() => {
           if (playbackRef.current && !playbackRef.current.isPlaying) {
             audioRef.current.pause();
@@ -74,7 +78,7 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
       audio.removeEventListener('ended', handleEnded);
       audio.removeEventListener('error', handleError);
       audio.pause();
-      audio.src = '';
+      audio.removeAttribute('src');
     };
   }, []);
 
@@ -96,13 +100,13 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
         ? track.url
         : `${cleanBackendUrl}${cleanTrackUrl}`;
 
-      if (audio.src !== fullUrl) {
+      if (audio.getAttribute('src') !== fullUrl) {
         setIsAudioReady(false);
         audio.src = fullUrl;
         audio.load();
       }
     } else {
-      audio.src = '';
+      audio.removeAttribute('src');
       setIsAudioReady(false);
       setCurrentTime(0);
       setDuration(0);
@@ -112,7 +116,7 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
   // Synchronize Playback State with Smooth PlaybackRate Steering (No Mobile Seeking Freezes!)
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio || !track || !playback) return;
+    if (!audio || !track || !playback || !audio.getAttribute('src')) return;
 
     const syncPlayback = async () => {
       const { isPlaying, trackOffset, serverStartTime } = playback;
@@ -225,7 +229,7 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
 
   // Setup Web Audio API Analyser Node
   const setupWebAudioAnalyser = useCallback(() => {
-    if (!audioRef.current || audioCtxRef.current) return analyserRef.current;
+    if (!audioRef.current || audioCtxRef.current || !audioRef.current.getAttribute('src')) return analyserRef.current;
 
     try {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -250,7 +254,7 @@ export function useAudioSync(track, playback, serverTimeOffset = 0) {
 
   const manualResync = useCallback(() => {
     const audio = audioRef.current;
-    if (!audio || !playback) return;
+    if (!audio || !playback || !audio.getAttribute('src')) return;
 
     if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
       audioCtxRef.current.resume().catch(console.warn);

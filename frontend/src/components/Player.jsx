@@ -1,11 +1,13 @@
-import React, { useRef, useState } from 'react';
-import { Play, Pause, Upload, Volume2, VolumeX, Copy, Check, Sliders, AlertCircle, Info } from 'lucide-react';
+import React, { useRef, useState, useEffect } from 'react';
+import { Play, Pause, Upload, Volume2, VolumeX, Copy, Check, Sliders, AlertCircle, Info, Radio, Disc } from 'lucide-react';
 import { BACKEND_URL } from '../utils/config';
 
 export function Player({
   role,
   roomState,
   session,
+  socketRef,
+  streamerRef,
   updateTrack,
   playTrack,
   pauseTrack,
@@ -27,9 +29,17 @@ export function Player({
   const [copied, setCopied] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
 
+  // Tab State: 'file' vs 'live'
+  const [activeTab, setActiveTab] = useState('file');
+
+  // Live Streamer State
+  const [isLiveBroadcasting, setIsLiveBroadcasting] = useState(false);
+  const [liveStreamError, setLiveStreamError] = useState(null);
+
   const track = roomState?.track;
   const isPlaying = roomState?.playback?.isPlaying || false;
   const isAdmin = role === 'ADMIN' || role === 'admin';
+  const isRoomLive = roomState?.isLiveBroadcast || false;
 
   const handleCopyRoomCode = () => {
     if (!roomState?.id) return;
@@ -37,6 +47,28 @@ export function Player({
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }).catch(console.warn);
+  };
+
+  const handleStartLiveBroadcast = async () => {
+    setLiveStreamError(null);
+    try {
+      if (streamerRef?.current) {
+        await streamerRef.current.startBroadcast(() => {
+          setIsLiveBroadcasting(false);
+        });
+        setIsLiveBroadcasting(true);
+      }
+    } catch (err) {
+      setLiveStreamError(err.message || 'Failed to start system audio capture.');
+      setIsLiveBroadcasting(false);
+    }
+  };
+
+  const handleStopLiveBroadcast = () => {
+    if (streamerRef?.current) {
+      streamerRef.current.stopBroadcast();
+    }
+    setIsLiveBroadcasting(false);
   };
 
   const processUploadFile = async (file) => {
@@ -83,7 +115,7 @@ export function Player({
   };
 
   const handleSeekChange = (e) => {
-    if (!isAdmin) return;
+    if (!isAdmin || isRoomLive) return;
     const newTime = parseFloat(e.target.value);
     seekTrack(newTime);
   };
@@ -132,7 +164,7 @@ export function Player({
       </div>
 
       {/* 2. AUDIO UNLOCK OVERLAY FOR LISTENERS & MOBILE BROWSERS */}
-      {isAudioLocked && (
+      {isAudioLocked && !isRoomLive && (
         <div
           onClick={manualResync}
           className="cursor-pointer p-4 rounded-2xl bg-[#c1ff72]/20 border border-[#c1ff72]/40 text-[#c1ff72] text-sm font-semibold flex items-center justify-between animate-pulse"
@@ -148,95 +180,185 @@ export function Player({
       {/* 3. AUDIO PLAYER CARD */}
       <div className="apple-glass rounded-3xl p-6 sm:p-8 border border-white/10 space-y-6">
         
-        {/* Track Title */}
+        {/* Track Title / Live Badge */}
         <div className="flex items-center justify-between border-b border-white/5 pb-4">
           <div>
-            <h3 className="font-bold text-xl text-white max-w-md truncate">
-              {track ? track.originalName : 'No Track Loaded'}
-            </h3>
-            <p className="text-xs text-zinc-500 mt-0.5">
-              {track ? `${(track.size / (1024 * 1024)).toFixed(2)} MB` : 'Host can upload an audio track below'}
+            <div className="flex items-center space-x-2">
+              {isRoomLive ? (
+                <span className="flex items-center space-x-1.5 px-3 py-0.5 rounded-full bg-red-600/20 border border-red-500/40 text-red-400 text-xs font-bold animate-pulse">
+                  <Radio className="w-3.5 h-3.5" />
+                  <span>LIVE BROADCASTING</span>
+                </span>
+              ) : (
+                <h3 className="font-bold text-xl text-white max-w-md truncate">
+                  {track ? track.originalName : 'No Track Loaded'}
+                </h3>
+              )}
+            </div>
+
+            <p className="text-xs text-zinc-500 mt-1">
+              {isRoomLive
+                ? 'Streaming Host Spotify / Apple Music / Desktop Audio'
+                : track
+                ? `${(track.size / (1024 * 1024)).toFixed(2)} MB`
+                : 'Host can upload an audio track or start a Live Broadcast below'}
             </p>
           </div>
 
           <div className="flex items-center space-x-2">
             <span className="text-xs px-3 py-1 rounded-full bg-zinc-900 border border-white/10 text-zinc-300 font-medium">
-              🟢 {syncStatus}
+              🟢 {isRoomLive ? 'Live Stream Active' : syncStatus}
             </span>
           </div>
         </div>
 
-        {/* HOST VIEW: Upload Dropzone */}
+        {/* HOST VIEW: Dual Mode Switcher (Upload MP3 vs Live Broadcast Spotify) */}
         {isAdmin && (
-          <div>
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={handleFileChange}
-              accept="audio/*"
-              className="hidden"
-            />
-            <div
-              onClick={() => fileInputRef.current?.click()}
-              onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
-              onDrop={handleDrop}
-              className={`p-5 rounded-2xl border border-dashed transition cursor-pointer text-center ${
-                isDragging ? 'border-[#c1ff72] bg-[#c1ff72]/10' : 'border-white/15 bg-white/5 hover:border-white/30'
-              }`}
-            >
-              <Upload className="w-5 h-5 text-[#c1ff72] mx-auto mb-1" />
-              <p className="text-xs font-medium text-zinc-300">
-                {isUploading ? 'Uploading...' : track ? 'Click or drop to replace audio file (MP3/WAV/AAC)' : 'Click or drop audio file here'}
-              </p>
+          <div className="space-y-4">
+            
+            {/* Tab Controls */}
+            <div className="flex rounded-xl bg-zinc-900/80 p-1 border border-white/10">
+              <button
+                onClick={() => setActiveTab('file')}
+                className={`flex-1 py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center space-x-2 transition ${
+                  activeTab === 'file' ? 'bg-[#c1ff72] text-black shadow-lime-glow-sm' : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                <Disc className="w-3.5 h-3.5" />
+                <span>📁 Upload Audio File</span>
+              </button>
+
+              <button
+                onClick={() => setActiveTab('live')}
+                className={`flex-1 py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center space-x-2 transition ${
+                  activeTab === 'live' ? 'bg-red-600 text-white shadow-red-500/40' : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                <Radio className="w-3.5 h-3.5" />
+                <span>🎙️ Live System Audio (Spotify / Apple Music)</span>
+              </button>
             </div>
-            {uploadError && <p className="mt-2 text-xs text-red-400">{uploadError}</p>}
+
+            {/* TAB 1: MP3 Upload Dropzone */}
+            {activeTab === 'file' && (
+              <div>
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleFileChange}
+                  accept="audio/*"
+                  className="hidden"
+                />
+                <div
+                  onClick={() => fileInputRef.current?.click()}
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop}
+                  className={`p-5 rounded-2xl border border-dashed transition cursor-pointer text-center ${
+                    isDragging ? 'border-[#c1ff72] bg-[#c1ff72]/10' : 'border-white/15 bg-white/5 hover:border-white/30'
+                  }`}
+                >
+                  <Upload className="w-5 h-5 text-[#c1ff72] mx-auto mb-1" />
+                  <p className="text-xs font-medium text-zinc-300">
+                    {isUploading ? 'Uploading...' : track ? 'Click or drop to replace audio file (MP3/WAV/AAC)' : 'Click or drop audio file here'}
+                  </p>
+                </div>
+                {uploadError && <p className="mt-2 text-xs text-red-400">{uploadError}</p>}
+              </div>
+            )}
+
+            {/* TAB 2: Live System / Spotify Audio Broadcaster */}
+            {activeTab === 'live' && (
+              <div className="p-5 rounded-2xl border border-white/10 bg-zinc-900/60 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-xs font-bold text-white flex items-center space-x-1.5">
+                      <span>Stream Spotify, Apple Music & Desktop Audio</span>
+                    </h4>
+                    <p className="text-[11px] text-zinc-400 mt-0.5">
+                      Select your **Spotify Tab**, **Apple Music Tab**, or **System Audio** and make sure <span className="text-[#c1ff72] font-semibold">"Share Audio"</span> is checked in the browser prompt.
+                    </p>
+                  </div>
+
+                  {!isLiveBroadcasting ? (
+                    <button
+                      onClick={handleStartLiveBroadcast}
+                      className="px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs shadow-lg shadow-red-500/30 transition flex items-center space-x-2 shrink-0"
+                    >
+                      <Radio className="w-4 h-4 animate-pulse" />
+                      <span>Start Live Broadcast</span>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleStopLiveBroadcast}
+                      className="px-5 py-2.5 rounded-xl bg-zinc-800 border border-red-500/40 text-red-400 hover:bg-red-500/20 font-bold text-xs transition shrink-0"
+                    >
+                      Stop Broadcast
+                    </button>
+                  )}
+                </div>
+
+                {liveStreamError && (
+                  <p className="text-xs text-red-400 bg-red-500/10 p-2.5 rounded-xl border border-red-500/20">{liveStreamError}</p>
+                )}
+              </div>
+            )}
+
           </div>
         )}
 
-        {/* Waveform Progress Scrubber */}
-        <div className="space-y-2">
-          <div className="relative">
-            <input
-              type="range"
-              min={0}
-              max={duration || 100}
-              step={0.1}
-              value={currentTime}
-              onChange={handleSeekChange}
-              disabled={!isAdmin || !track}
-              className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-[#c1ff72] disabled:cursor-not-allowed"
-            />
-            <div
-              className="absolute top-0 left-0 h-2 bg-[#c1ff72] rounded-lg pointer-events-none"
-              style={{ width: `${progressPercent}%` }}
-            />
+        {/* Waveform Progress Scrubber (Static File Mode) */}
+        {!isRoomLive && (
+          <div className="space-y-2">
+            <div className="relative">
+              <input
+                type="range"
+                min={0}
+                max={duration || 100}
+                step={0.1}
+                value={currentTime}
+                onChange={handleSeekChange}
+                disabled={!isAdmin || !track}
+                className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-[#c1ff72] disabled:cursor-not-allowed"
+              />
+              <div
+                className="absolute top-0 left-0 h-2 bg-[#c1ff72] rounded-lg pointer-events-none"
+                style={{ width: `${progressPercent}%` }}
+              />
+            </div>
+            <div className="flex justify-between text-xs font-mono text-zinc-500">
+              <span>{formatTime(currentTime)}</span>
+              <span>{formatTime(duration)}</span>
+            </div>
           </div>
-          <div className="flex justify-between text-xs font-mono text-zinc-500">
-            <span>{formatTime(currentTime)}</span>
-            <span>{formatTime(duration)}</span>
-          </div>
-        </div>
+        )}
 
         {/* Master Playback Controls & Volume */}
         <div className="flex items-center justify-between pt-2">
           
           <div>
-            {isAdmin ? (
-              <button
-                onClick={() => (isPlaying ? pauseTrack(currentTime) : playTrack(currentTime))}
-                disabled={!track}
-                className="w-14 h-14 rounded-full bg-[#c1ff72] text-black font-bold flex items-center justify-center hover:bg-lime-glow transition disabled:opacity-30"
-              >
-                {isPlaying ? <Pause className="w-6 h-6 fill-current" /> : <Play className="w-6 h-6 fill-current ml-0.5" />}
-              </button>
+            {!isRoomLive ? (
+              isAdmin ? (
+                <button
+                  onClick={() => (isPlaying ? pauseTrack(currentTime) : playTrack(currentTime))}
+                  disabled={!track}
+                  className="w-14 h-14 rounded-full bg-[#c1ff72] text-black font-bold flex items-center justify-center hover:bg-lime-glow transition disabled:opacity-30"
+                >
+                  {isPlaying ? <Pause className="w-6 h-6 fill-current" /> : <Play className="w-6 h-6 fill-current ml-0.5" />}
+                </button>
+              ) : (
+                <button
+                  onClick={manualResync}
+                  className="px-5 py-2.5 rounded-full bg-zinc-900 text-xs font-semibold text-[#c1ff72] border border-[#c1ff72]/30 hover:bg-zinc-800 transition"
+                >
+                  {isPlaying ? '🔊 Synchronized with Host' : '⏸️ Host Paused Audio'}
+                </button>
+              )
             ) : (
-              <button
-                onClick={manualResync}
-                className="px-5 py-2.5 rounded-full bg-zinc-900 text-xs font-semibold text-[#c1ff72] border border-[#c1ff72]/30 hover:bg-zinc-800 transition"
-              >
-                {isPlaying ? '🔊 Synchronized with Host' : '⏸️ Host Paused Audio'}
-              </button>
+              <div className="flex items-center space-x-2 text-red-400 font-bold text-xs bg-red-600/10 px-4 py-2 rounded-full border border-red-500/20">
+                <Radio className="w-4 h-4 animate-pulse" />
+                <span>Streaming Live Audio</span>
+              </div>
             )}
           </div>
 

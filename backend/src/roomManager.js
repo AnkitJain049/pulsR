@@ -104,7 +104,9 @@ class RoomManager {
           adminSessionId: dbRoom.adminSessionId,
           clients: new Map(),
           track: dbRoom.track || null,
-          playback: dbRoom.playback || { isPlaying: false, trackOffset: 0, serverStartTime: 0 }
+          playback: dbRoom.playback || { isPlaying: false, trackOffset: 0, serverStartTime: 0 },
+          isLiveBroadcast: false,
+          liveMimeType: null
         };
         this.rooms.set(cleanId, restoredRoom);
         return restoredRoom;
@@ -140,7 +142,9 @@ class RoomManager {
         isPlaying: false,
         trackOffset: 0,
         serverStartTime: 0
-      }
+      },
+      isLiveBroadcast: false,
+      liveMimeType: null
     };
 
     this.rooms.set(roomId, room);
@@ -330,7 +334,9 @@ class RoomManager {
         isPlaying: room.playback.isPlaying,
         trackOffset: room.playback.trackOffset,
         serverStartTime: room.playback.serverStartTime
-      }
+      },
+      isLiveBroadcast: room.isLiveBroadcast || false,
+      liveMimeType: room.liveMimeType || null
     };
   }
 }

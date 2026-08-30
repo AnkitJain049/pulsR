@@ -2,12 +2,14 @@ import React, { useEffect, useState, useRef } from 'react';
 import { BrowserRouter, Routes, Route, useNavigate, useParams, useLocation } from 'react-router-dom';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useAudioSync } from './hooks/useAudioSync';
+import { useLiveAudioStream } from './hooks/useLiveAudioStream';
 import { Header } from './components/Header';
 import { RoomJoin } from './components/RoomJoin';
 import { Player } from './components/Player';
 import { DeviceList } from './components/DeviceList';
 import { AudioVisualizer } from './components/AudioVisualizer';
 import { ConfirmModal } from './components/ConfirmModal';
+import { PulsrLiveStreamer } from './utils/PulsrLiveStreamer';
 
 function MainAppContent() {
   const navigate = useNavigate();
@@ -16,8 +18,10 @@ function MainAppContent() {
 
   const [showExitModal, setShowExitModal] = useState(false);
   const isExitingRef = useRef(false);
+  const streamerRef = useRef(null);
 
   const {
+    socketRef,
     connected,
     session,
     roomState,
@@ -26,6 +30,7 @@ function MainAppContent() {
     serverTimeOffset,
     hardwareCalibration,
     setHardwareCalibration,
+    latestLiveChunk,
     error,
     createRoom,
     joinRoom,
@@ -38,9 +43,19 @@ function MainAppContent() {
     updateProfile
   } = useWebSocket();
 
+  // Initialize PulsrLiveStreamer singleton
+  useEffect(() => {
+    if (!streamerRef.current) {
+      streamerRef.current = new PulsrLiveStreamer(socketRef);
+    } else {
+      streamerRef.current.setSocketRef(socketRef);
+    }
+  }, [socketRef]);
+
   const track = roomState?.track;
   const playback = roomState?.playback;
   const isHost = role === 'ADMIN' || role === 'admin';
+  const isLiveBroadcast = roomState?.isLiveBroadcast || false;
 
   const totalOffset = serverTimeOffset + (hardwareCalibration / 1000);
 
@@ -56,6 +71,15 @@ function MainAppContent() {
     analyserRef,
     manualResync
   } = useAudioSync(track, playback, totalOffset);
+
+  // Listener hook for receiving live audio chunks from Spotify/Apple Music capture
+  const { handleLiveChunk } = useLiveAudioStream(isLiveBroadcast && !isHost, roomState?.liveMimeType);
+
+  useEffect(() => {
+    if (latestLiveChunk?.chunk && isLiveBroadcast && !isHost) {
+      handleLiveChunk(latestLiveChunk.chunk);
+    }
+  }, [latestLiveChunk, isLiveBroadcast, isHost, handleLiveChunk]);
 
   const isPlaying = playback?.isPlaying || false;
 
@@ -156,6 +180,8 @@ function MainAppContent() {
                 role={role}
                 roomState={roomState}
                 session={session}
+                socketRef={socketRef}
+                streamerRef={streamerRef}
                 updateTrack={updateTrack}
                 playTrack={playTrack}
                 pauseTrack={pauseTrack}
@@ -174,8 +200,10 @@ function MainAppContent() {
 
               <AudioVisualizer
                 isPlaying={isPlaying}
+                isLiveBroadcast={isLiveBroadcast}
                 setupWebAudioAnalyser={setupWebAudioAnalyser}
                 analyserRef={analyserRef}
+                streamerRef={streamerRef}
               />
             </div>
 
