@@ -324,7 +324,7 @@ export function Player({
                     </div>
 
                     <p className="text-[11px] text-zinc-400 leading-relaxed">
-                      💡 <strong className="text-white">Tip for 100% Sync:</strong> Mute or lower the volume of your Spotify / Apple Music app window, and listen through PULSR so your laptop speakers match all listeners down to the millisecond!
+                      💡 <strong className="text-white">Note on Audio Capture:</strong> Keep the volume slider inside Apple Music / Spotify app up so Chrome can capture the digital stream! Chrome automatically mutes local speaker playback (`suppressLocalAudioPlayback`), or you can enable <strong>Host Speaker Monitoring</strong> above to play synced room sound through your laptop!
                     </p>
                   </div>
                 )}
