@@ -18,6 +18,16 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
   const [isLiveAudioPlaying, setIsLiveAudioPlaying] = useState(false);
   const [liveError, setLiveError] = useState(null);
 
+  // Helper: Exception-guarded check for SourceBuffer buffered data availability
+  const hasBufferedData = useCallback((sb) => {
+    if (!sb || !mediaSourceRef.current || mediaSourceRef.current.readyState !== 'open') return false;
+    try {
+      return Boolean(sb.buffered && sb.buffered.length > 0);
+    } catch (err) {
+      return false;
+    }
+  }, []);
+
   // Convert Base64 string to Uint8Array ArrayBuffer
   const base64ToArrayBuffer = useCallback((base64) => {
     const binaryString = window.atob(base64);
@@ -117,7 +127,7 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
 
           sb.addEventListener('updateend', () => {
             processQueue();
-            if (audio.paused && sb.buffered.length > 0) {
+            if (audio.paused && hasBufferedData(sb)) {
               audio.play().then(() => {
                 setIsLiveAudioPlaying(true);
                 getAudioContext();
@@ -138,7 +148,7 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
 
       // Global gesture listener to trigger playback if browser blocks autoplay
       const unlockPlay = () => {
-        if (audioRef.current && audioRef.current.paused && sourceBufferRef.current?.buffered.length > 0) {
+        if (audioRef.current && audioRef.current.paused && hasBufferedData(sourceBufferRef.current)) {
           audioRef.current.play().then(() => {
             setIsLiveAudioPlaying(true);
             getAudioContext();
@@ -169,7 +179,7 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
     } catch (gErr) {
       console.error('Live stream setup exception:', gErr);
     }
-  }, [isLiveBroadcast, liveMimeType, processQueue, getAudioContext]);
+  }, [isLiveBroadcast, liveMimeType, processQueue, getAudioContext, hasBufferedData]);
 
   // Handle incoming live chunk from WebSocket
   const handleLiveChunk = useCallback((base64Chunk) => {
@@ -183,13 +193,13 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
       processQueue();
     }
 
-    if (audioRef.current && audioRef.current.paused && sb && sb.buffered.length > 0) {
+    if (audioRef.current && audioRef.current.paused && hasBufferedData(sb)) {
       audioRef.current.play().then(() => {
         setIsLiveAudioPlaying(true);
         getAudioContext();
       }).catch(() => {});
     }
-  }, [isLiveBroadcast, base64ToArrayBuffer, processQueue, getAudioContext]);
+  }, [isLiveBroadcast, base64ToArrayBuffer, processQueue, getAudioContext, hasBufferedData]);
 
   return {
     liveAudioRef: audioRef,
