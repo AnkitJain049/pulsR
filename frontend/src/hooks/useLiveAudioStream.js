@@ -75,94 +75,100 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
     audio.preload = 'auto';
     audioRef.current = audio;
 
-    // Immediately setup Web Audio Analyser Node on the audio element for visualizer
-    try {
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      const ctx = new AudioCtx();
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 128;
-
-      const source = ctx.createMediaElementSource(audio);
-      source.connect(analyser);
-      analyser.connect(ctx.destination);
-
-      audioCtxRef.current = ctx;
-      analyserRef.current = analyser;
-      sourceRef.current = source;
-    } catch (err) {
-      console.warn('Listener Web Audio setup notice:', err);
-    }
-
     if (typeof MediaSource === 'undefined') {
       setLiveError('MediaSource Extensions (MSE) are not supported on this browser.');
       return;
     }
 
-    const mediaSource = new MediaSource();
-    mediaSourceRef.current = mediaSource;
-    audio.src = URL.createObjectURL(mediaSource);
+    try {
+      const mediaSource = new MediaSource();
+      mediaSourceRef.current = mediaSource;
+      audio.src = URL.createObjectURL(mediaSource);
 
-    const handleSourceOpen = () => {
+      // Safely initialize Web Audio Analyser AFTER audio.src URL is assigned
       try {
-        const mime = liveMimeType || 'audio/webm;codecs=opus';
-        const targetMime = (MediaSource.isTypeSupported(mime))
-          ? mime
-          : (MediaSource.isTypeSupported('audio/webm') ? 'audio/webm' : '');
+        if (!sourceRef.current) {
+          const AudioCtx = window.AudioContext || window.webkitAudioContext;
+          const ctx = new AudioCtx();
+          const analyser = ctx.createAnalyser();
+          analyser.fftSize = 128;
 
-        const sb = mediaSource.addSourceBuffer(targetMime || 'audio/webm');
-        sourceBufferRef.current = sb;
+          const source = ctx.createMediaElementSource(audio);
+          source.connect(analyser);
+          analyser.connect(ctx.destination);
 
-        sb.addEventListener('updateend', () => {
-          processQueue();
-          if (audio.paused && sb.buffered.length > 0) {
-            audio.play().then(() => {
-              setIsLiveAudioPlaying(true);
-              getAudioContext();
-            }).catch(e => {
-              console.warn('Live audio waiting for user gesture unlock:', e);
-            });
-          }
-        });
-
-        processQueue();
-      } catch (err) {
-        console.error('Failed to create SourceBuffer:', err);
-        setLiveError('Failed to initialize live audio decoder.');
+          audioCtxRef.current = ctx;
+          analyserRef.current = analyser;
+          sourceRef.current = source;
+        }
+      } catch (eErr) {
+        console.warn('Listener Web Audio Analyser setup notice:', eErr);
       }
-    };
 
-    mediaSource.addEventListener('sourceopen', handleSourceOpen);
-
-    // Global gesture listener to trigger playback if browser blocks autoplay
-    const unlockPlay = () => {
-      if (audioRef.current && audioRef.current.paused && sourceBufferRef.current?.buffered.length > 0) {
-        audioRef.current.play().then(() => {
-          setIsLiveAudioPlaying(true);
-          getAudioContext();
-        }).catch(() => {});
-      }
-    };
-    window.addEventListener('touchstart', unlockPlay, { passive: true });
-    window.addEventListener('click', unlockPlay, { passive: true });
-
-    return () => {
-      window.removeEventListener('touchstart', unlockPlay);
-      window.removeEventListener('click', unlockPlay);
-      mediaSource.removeEventListener('sourceopen', handleSourceOpen);
-      chunkQueueRef.current = [];
-      sourceBufferRef.current = null;
-      mediaSourceRef.current = null;
-      if (audioCtxRef.current) {
+      const handleSourceOpen = () => {
         try {
-          audioCtxRef.current.close();
-        } catch (e) {}
-        audioCtxRef.current = null;
-        analyserRef.current = null;
-        sourceRef.current = null;
-      }
-      audio.pause();
-      audio.removeAttribute('src');
-    };
+          const mime = liveMimeType || 'audio/webm;codecs=opus';
+          const targetMime = (MediaSource.isTypeSupported(mime))
+            ? mime
+            : (MediaSource.isTypeSupported('audio/webm') ? 'audio/webm' : '');
+
+          const sb = mediaSource.addSourceBuffer(targetMime || 'audio/webm');
+          sourceBufferRef.current = sb;
+
+          sb.addEventListener('updateend', () => {
+            processQueue();
+            if (audio.paused && sb.buffered.length > 0) {
+              audio.play().then(() => {
+                setIsLiveAudioPlaying(true);
+                getAudioContext();
+              }).catch(e => {
+                console.warn('Live audio waiting for user gesture unlock:', e);
+              });
+            }
+          });
+
+          processQueue();
+        } catch (err) {
+          console.error('Failed to create SourceBuffer:', err);
+          setLiveError('Failed to initialize live audio decoder.');
+        }
+      };
+
+      mediaSource.addEventListener('sourceopen', handleSourceOpen);
+
+      // Global gesture listener to trigger playback if browser blocks autoplay
+      const unlockPlay = () => {
+        if (audioRef.current && audioRef.current.paused && sourceBufferRef.current?.buffered.length > 0) {
+          audioRef.current.play().then(() => {
+            setIsLiveAudioPlaying(true);
+            getAudioContext();
+          }).catch(() => {});
+        }
+      };
+      window.addEventListener('touchstart', unlockPlay, { passive: true });
+      window.addEventListener('click', unlockPlay, { passive: true });
+
+      return () => {
+        window.removeEventListener('touchstart', unlockPlay);
+        window.removeEventListener('click', unlockPlay);
+        mediaSource.removeEventListener('sourceopen', handleSourceOpen);
+        chunkQueueRef.current = [];
+        sourceBufferRef.current = null;
+        mediaSourceRef.current = null;
+        if (audioCtxRef.current) {
+          try {
+            audioCtxRef.current.close();
+          } catch (e) {}
+          audioCtxRef.current = null;
+          analyserRef.current = null;
+          sourceRef.current = null;
+        }
+        audio.pause();
+        audio.removeAttribute('src');
+      };
+    } catch (gErr) {
+      console.error('Live stream setup exception:', gErr);
+    }
   }, [isLiveBroadcast, liveMimeType, processQueue, getAudioContext]);
 
   // Handle incoming live chunk from WebSocket
