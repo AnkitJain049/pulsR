@@ -127,12 +127,14 @@ export function setupWebSocketHandler(wss) {
 
             // If room has an active live broadcast, send the cached WebM header chunk #0 to initialize joining listener decoder
             if (room.isLiveBroadcast && room.liveHeaderChunk) {
+              const now = Date.now();
               socket.send(JSON.stringify({
                 type: 'LIVE_AUDIO_CHUNK',
                 payload: {
                   chunk: room.liveHeaderChunk,
                   mimeType: room.liveMimeType,
-                  timestamp: Date.now()
+                  timestamp: now,
+                  targetServerPlayTime: now + 1000
                 }
               }));
             }
@@ -230,6 +232,9 @@ export function setupWebSocketHandler(wss) {
             const clientData = room.clients.get(socket);
             if (clientData?.role !== 'ADMIN' && clientData?.role !== 'admin') break;
 
+            const now = Date.now();
+            const targetServerPlayTime = now + 1000; // Unified 1000ms future playback target on server clock
+
             // Cache the initial WebM Header Chunk #0 for mid-stream joining listeners
             if (!room.liveHeaderChunk && payload.chunk) {
               room.liveHeaderChunk = payload.chunk;
@@ -240,7 +245,8 @@ export function setupWebSocketHandler(wss) {
               payload: {
                 chunk: payload.chunk,
                 mimeType: payload.mimeType,
-                timestamp: payload.timestamp
+                timestamp: payload.timestamp || now,
+                targetServerPlayTime: targetServerPlayTime
               }
             });
 

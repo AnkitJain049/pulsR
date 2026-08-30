@@ -73,13 +73,17 @@ function MainAppContent() {
     manualResync
   } = useAudioSync(track, playback, totalOffset);
 
-  // Live Stream Receiver Hook (Active for Listeners OR Host with hostMonitoring ON)
+  // Live Stream Receiver Hook with Cristian's Algorithm Server Clock Synchronization
   const isReceiverActive = isLiveBroadcast && (!isHost || hostMonitoring);
-  const { handleLiveChunk, listenerAnalyserRef, getAudioContext } = useLiveAudioStream(isReceiverActive);
+  const { handleLiveChunk, listenerAnalyserRef, getAudioContext } = useLiveAudioStream(
+    isReceiverActive,
+    roomState?.liveMimeType,
+    serverTimeOffset
+  );
 
   useEffect(() => {
     if (latestLiveChunk?.chunk && isReceiverActive) {
-      handleLiveChunk(latestLiveChunk.chunk);
+      handleLiveChunk(latestLiveChunk);
     }
   }, [latestLiveChunk, isReceiverActive, handleLiveChunk]);
 
@@ -91,7 +95,7 @@ function MainAppContent() {
       }
     };
     window.addEventListener('touchstart', unlockListenerAudio, { passive: true });
-    window.addEventListener('click', unlockUnlock => unlockListenerAudio(), { passive: true });
+    window.addEventListener('click', unlockListenerAudio, { passive: true });
     return () => {
       window.removeEventListener('touchstart', unlockListenerAudio);
       window.removeEventListener('click', unlockListenerAudio);
