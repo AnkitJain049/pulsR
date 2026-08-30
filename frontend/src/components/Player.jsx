@@ -179,20 +179,6 @@ export function Player({
         </div>
       )}
 
-      {/* LIVE BROADCAST UNLOCK OVERLAY FOR LISTENERS */}
-      {(!isAdmin && isRoomLive) && (
-        <div
-          onClick={manualResync}
-          className="cursor-pointer p-4 rounded-2xl bg-red-600/20 border border-red-500/40 text-red-400 text-sm font-semibold flex items-center justify-between animate-pulse shadow-lg shadow-red-500/10"
-        >
-          <div className="flex items-center space-x-2">
-            <Radio className="w-4 h-4 animate-pulse" />
-            <span>Tap Anywhere or Click Here to Connect Live Spotify Audio & Visualizer</span>
-          </div>
-          <span className="px-4 py-1.5 rounded-xl bg-red-600 text-white text-xs font-extrabold shadow-red-500/30">Connect Sound</span>
-        </div>
-      )}
-
       {/* 3. AUDIO PLAYER CARD */}
       <div className="apple-glass rounded-3xl p-6 sm:p-8 border border-white/10 space-y-6">
         

@@ -123,12 +123,15 @@ function MainAppContent() {
     }
   }, [roomState, location.pathname, navigate]);
 
-  // 2. Direct URL Join / Refresh Support (e.g. user opens /room/ROOM-A4X9)
+  // 2. Direct URL Join / Page Refresh Persistence Support (auto re-joins room with stored device username on refresh)
   useEffect(() => {
-    if (connected && urlRoomId && (!roomState || roomState.id !== urlRoomId) && !isExitingRef.current) {
-      joinRoom(urlRoomId);
+    const targetRoomId = urlRoomId || localStorage.getItem('pulsr_active_room');
+    const storedUsername = localStorage.getItem('pulsr_username') || session.username;
+
+    if (connected && targetRoomId && (!roomState || roomState.id !== targetRoomId) && !isExitingRef.current) {
+      joinRoom(targetRoomId, storedUsername);
     }
-  }, [connected, urlRoomId, roomState, joinRoom]);
+  }, [connected, urlRoomId, roomState, joinRoom, session.username]);
 
   // 3. Intercept Browser Back Button Navigation inside a room
   useEffect(() => {

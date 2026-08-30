@@ -12,11 +12,17 @@ function getStoredSessionId() {
   return id;
 }
 
+// Get stored username from localStorage
+function getStoredUsername() {
+  if (typeof window === 'undefined') return '';
+  return localStorage.getItem('pulsr_username') || '';
+}
+
 export function useWebSocket() {
   const [connected, setConnected] = useState(false);
   const [session, setSession] = useState(() => ({
     sessionId: getStoredSessionId(),
-    username: ''
+    username: getStoredUsername()
   }));
   const [roomState, setRoomState] = useState(null);
   const [role, setRole] = useState(null);
@@ -60,12 +66,13 @@ export function useWebSocket() {
       setConnected(true);
       setError(null);
 
-      // Send existing stored sessionId if available
+      // Send existing stored profile (sessionId + username) on reconnect
       const storedId = getStoredSessionId();
-      if (storedId) {
+      const storedUsername = getStoredUsername();
+      if (storedId || storedUsername) {
         ws.send(JSON.stringify({
           type: 'UPDATE_PROFILE',
-          payload: { sessionId: storedId }
+          payload: { sessionId: storedId, username: storedUsername }
         }));
       }
 
@@ -93,11 +100,18 @@ export function useWebSocket() {
 
         switch (type) {
           case 'SESSION_INIT': {
-            const activeSessionId = session.sessionId || payload.sessionId;
+            const activeSessionId = getStoredSessionId() || payload.sessionId;
+            const storedUser = getStoredUsername();
+            const activeUsername = storedUser || payload.username || session.username;
+
             localStorage.setItem('pulsr_session_id', activeSessionId);
+            if (activeUsername) {
+              localStorage.setItem('pulsr_username', activeUsername);
+            }
+
             setSession({
               sessionId: activeSessionId,
-              username: payload.username || session.username
+              username: activeUsername
             });
             break;
           }
@@ -109,9 +123,16 @@ export function useWebSocket() {
             const assignedRoomState = payload.roomState;
             setRole(assignedRole);
             setRoomState(assignedRoomState);
+
+            if (assignedRoomState?.id) {
+              localStorage.setItem('pulsr_active_room', assignedRoomState.id);
+            }
+
             if (payload.username) {
+              localStorage.setItem('pulsr_username', payload.username);
               setSession(prev => ({ ...prev, username: payload.username }));
             }
+
             setError(null);
             if (socketRef.current) triggerRapidSync(socketRef.current);
             break;
@@ -181,36 +202,33 @@ export function useWebSocket() {
             samples.push({ rtt, offset: rawOffset });
             if (samples.length > 15) samples.shift();
 
-            // Cristian's Algorithm: Sort by RTT and average lowest 30% latency samples
-            const sortedByRtt = [...samples].sort((a, b) => a.rtt - b.rtt);
-            const bestCount = Math.max(1, Math.floor(sortedByRtt.length * 0.3));
-            const bestSamples = sortedByRtt.slice(0, bestCount);
+            // Sort samples by lowest RTT (best latency network conditions)
+            const sorted = [...samples].sort((a, b) => a.rtt - b.rtt);
+            // Select median offset from top 50% lowest RTT samples
+            const bestHalf = sorted.slice(0, Math.max(1, Math.floor(sorted.length / 2)));
+            const medianOffset = bestHalf[Math.floor(bestHalf.length / 2)].offset;
 
-            const avgBestOffset = bestSamples.reduce((sum, s) => sum + s.offset, 0) / bestCount;
-
-            // Exponential Moving Average (EMA) smoothing to eliminate cloud jitter
-            setServerTimeOffset(prev => {
-              if (prev === 0) return avgBestOffset;
-              return Math.round(prev * 0.75 + avgBestOffset * 0.25);
-            });
+            setServerTimeOffset(medianOffset);
             break;
           }
 
           case 'ROOM_DISCARDED': {
+            setError(payload.message || 'Room has been discarded.');
+            localStorage.removeItem('pulsr_active_room');
             setRoomState(null);
             setRole(null);
-            setError(payload?.message || 'The host has discarded this room.');
             break;
           }
 
           case 'ROOM_LEFT': {
+            localStorage.removeItem('pulsr_active_room');
             setRoomState(null);
             setRole(null);
             break;
           }
 
           case 'ERROR': {
-            setError(payload?.message || 'WebSocket Error');
+            setError(payload.message || 'WebSocket Error');
             break;
           }
 
@@ -218,121 +236,130 @@ export function useWebSocket() {
             break;
         }
       } catch (err) {
-        console.error('Failed to parse WebSocket message:', err);
+        console.error('Error parsing WS message:', err);
       }
     };
 
     ws.onclose = () => {
-      if (!isSubscribed) return;
-      setConnected(false);
-      if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
+      if (isSubscribed) {
+        setConnected(false);
+      }
     };
 
     ws.onerror = (err) => {
-      if (!isSubscribed) return;
-      // Suppress unmount & transient dev server socket closure warnings
-      if (ws.readyState === WebSocket.CLOSED) return;
-      console.warn('WebSocket connection notice:', err);
+      if (isSubscribed) {
+        console.error('WebSocket Error:', err);
+        setError('Connection to server lost. Retrying...');
+      }
     };
 
     return () => {
       isSubscribed = false;
       if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
-      if (ws) {
-        ws.onopen = null;
-        ws.onmessage = null;
-        ws.onerror = null;
-        ws.onclose = null;
-        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-          ws.close();
-        }
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+        ws.close();
       }
     };
   }, [triggerRapidSync]);
 
-  // Action methods
-  const createRoom = useCallback(() => {
-    const activeSessionId = getStoredSessionId();
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
-      socketRef.current.send(JSON.stringify({
-        type: 'CREATE_ROOM',
-        payload: { sessionId: activeSessionId, username: session.username }
-      }));
+  // Actions
+  const createRoom = useCallback((customUsername) => {
+    if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) return;
+    const activeUsername = customUsername || session.username || getStoredUsername();
+    if (activeUsername) {
+      localStorage.setItem('pulsr_username', activeUsername);
     }
-  }, [session.username]);
+    socketRef.current.send(JSON.stringify({
+      type: 'CREATE_ROOM',
+      payload: {
+        sessionId: session.sessionId,
+        username: activeUsername
+      }
+    }));
+  }, [session.sessionId, session.username]);
 
-  const joinRoom = useCallback((roomId) => {
-    const activeSessionId = getStoredSessionId();
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
-      socketRef.current.send(JSON.stringify({
-        type: 'JOIN_ROOM',
-        payload: { roomId, sessionId: activeSessionId, username: session.username }
-      }));
+  const joinRoom = useCallback((roomId, customUsername) => {
+    if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN || !roomId) return;
+    const activeUsername = customUsername || session.username || getStoredUsername();
+    if (activeUsername) {
+      localStorage.setItem('pulsr_username', activeUsername);
     }
-  }, [session.username]);
+    localStorage.setItem('pulsr_active_room', roomId.trim().toUpperCase());
+    socketRef.current.send(JSON.stringify({
+      type: 'JOIN_ROOM',
+      payload: {
+        roomId: roomId.trim().toUpperCase(),
+        sessionId: session.sessionId,
+        username: activeUsername
+      }
+    }));
+  }, [session.sessionId, session.username]);
 
   const leaveRoom = useCallback(() => {
+    if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) return;
+    localStorage.removeItem('pulsr_active_room');
+    socketRef.current.send(JSON.stringify({
+      type: 'LEAVE_ROOM'
+    }));
     setRoomState(null);
     setRole(null);
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
-      socketRef.current.send(JSON.stringify({ type: 'LEAVE_ROOM' }));
-    }
   }, []);
 
   const discardRoom = useCallback(() => {
+    if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) return;
+    localStorage.removeItem('pulsr_active_room');
+    socketRef.current.send(JSON.stringify({
+      type: 'DISCARD_ROOM'
+    }));
     setRoomState(null);
     setRole(null);
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
-      socketRef.current.send(JSON.stringify({ type: 'DISCARD_ROOM' }));
-    }
   }, []);
 
-  const updateTrack = useCallback((track) => {
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
-      socketRef.current.send(JSON.stringify({
-        type: 'UPDATE_TRACK',
-        payload: { track }
-      }));
-    }
+  const updateTrack = useCallback((trackData) => {
+    if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) return;
+    socketRef.current.send(JSON.stringify({
+      type: 'UPDATE_TRACK',
+      payload: { track: trackData }
+    }));
   }, []);
 
   const playTrack = useCallback((offset = 0) => {
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
-      socketRef.current.send(JSON.stringify({
-        type: 'PLAY',
-        payload: { trackOffset: offset }
-      }));
-    }
+    if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) return;
+    socketRef.current.send(JSON.stringify({
+      type: 'PLAY',
+      payload: { trackOffset: offset }
+    }));
   }, []);
 
   const pauseTrack = useCallback((offset = 0) => {
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
-      socketRef.current.send(JSON.stringify({
-        type: 'PAUSE',
-        payload: { trackOffset: offset }
-      }));
-    }
+    if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) return;
+    socketRef.current.send(JSON.stringify({
+      type: 'PAUSE',
+      payload: { trackOffset: offset }
+    }));
   }, []);
 
   const seekTrack = useCallback((offset = 0) => {
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
-      socketRef.current.send(JSON.stringify({
-        type: 'SEEK',
-        payload: { trackOffset: offset }
-      }));
-    }
+    if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) return;
+    socketRef.current.send(JSON.stringify({
+      type: 'SEEK',
+      payload: { trackOffset: offset }
+    }));
   }, []);
 
   const updateProfile = useCallback((newUsername) => {
-    setSession(prev => ({ ...prev, username: newUsername }));
-    const activeSessionId = getStoredSessionId();
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
+    if (!newUsername) return;
+    const cleanUsername = newUsername.trim();
+    localStorage.setItem('pulsr_username', cleanUsername);
+    setSession(prev => ({ ...prev, username: cleanUsername }));
+
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
       socketRef.current.send(JSON.stringify({
         type: 'UPDATE_PROFILE',
-        payload: { username: newUsername, sessionId: activeSessionId }
+        payload: { username: cleanUsername, sessionId: session.sessionId }
       }));
     }
-  }, []);
+  }, [session.sessionId]);
 
   return {
     socketRef,
