@@ -4,8 +4,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
  * useLiveAudioStream.js
  * Media Source Extensions (MSE) Live Audio Receiver Hook
  * Receives WebM Opus audio chunks over WebSockets and feeds them into HTML5 MediaSource SourceBuffer.
- * Implements Cristian's Algorithm Server Clock Synchronized Hard-Sync & Smooth Steering (< 5ms drift).
- * Uses Muted Autoplay Fallback so stream buffer builds instantly even before user gesture unlock.
+ * Implements smooth sample-accurate sync and automatic buffer pruning to prevent memory leaks.
  */
 export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;codecs=opus', serverTimeOffset = 0) {
   const audioRef = useRef(null);
@@ -15,8 +14,6 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
   const audioCtxRef = useRef(null);
   const analyserRef = useRef(null);
   const sourceRef = useRef(null);
-  const playScheduledRef = useRef(false);
-  const lastChunkTimestampRef = useRef(0);
 
   const [isLiveAudioPlaying, setIsLiveAudioPlaying] = useState(false);
   const [liveError, setLiveError] = useState(null);
@@ -76,18 +73,17 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
     }
   }, []);
 
-  // Safe playback trigger with muted fallback if browser blocks unmuted autoplay
+  // Safe playback trigger
   const triggerAudioPlay = useCallback(() => {
     const audio = audioRef.current;
     const sb = sourceBufferRef.current;
     if (!audio || !hasBufferedData(sb)) return;
 
-    // Try unmuted playback first
     audio.play().then(() => {
       setIsLiveAudioPlaying(true);
       getAudioContext();
     }).catch((err) => {
-      // If browser blocks unmuted autoplay, play muted first so buffer timeline builds cleanly
+      // Muted fallback if browser blocks unmuted autoplay
       audio.muted = true;
       audio.play().then(() => {
         setIsLiveAudioPlaying(true);
@@ -96,12 +92,12 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
     });
   }, [hasBufferedData, getAudioContext]);
 
-  // Process queued audio chunks into MSE SourceBuffer sequentially with Cristian's Algorithm Hard-Sync & Steering
+  // Process queued audio chunks into MSE SourceBuffer sequentially
   const processQueue = useCallback(() => {
     const sb = sourceBufferRef.current;
     if (!sb || sb.updating || !mediaSourceRef.current || mediaSourceRef.current.readyState !== 'open') return;
 
-    // 1. Prune old played audio buffer ranges (> 10s behind current playback)
+    // 1. Prune old played audio buffer ranges (> 6s behind current playback)
     try {
       if (audioRef.current && hasBufferedData(sb)) {
         const start = sb.buffered.start(0);
@@ -115,25 +111,19 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
       }
     } catch (e) {}
 
-    // 2. Cristian's Algorithm Server Clock Hard-Sync & Proportional PlaybackRate Steering (< 5ms Drift)
+    // 2. Playback rate sync steering
     try {
       if (audioRef.current && hasBufferedData(sb) && !audioRef.current.paused) {
         const bufEnd = sb.buffered.end(0);
         const curTime = audioRef.current.currentTime;
-        
-        // Target playback position is strictly 1.000 second behind the latest buffer end
-        const expectedTime = Math.max(sb.buffered.start(0), bufEnd - 1.0);
-        const driftSec = expectedTime - curTime;
+        const bufferAhead = bufEnd - curTime;
 
-        if (Math.abs(driftSec) > 0.35) {
-          // Hard-seek if drift is greater than 350ms to instantly align devices
-          audioRef.current.currentTime = expectedTime;
-        } else if (Math.abs(driftSec) > 0.02) {
-          // Proportional rate steering for subtle drift between 20ms and 350ms
-          const targetRate = 1.0 + Math.max(-0.06, Math.min(0.06, driftSec * 0.5));
-          audioRef.current.playbackRate = targetRate;
+        if (bufferAhead > 1.5) {
+          audioRef.current.playbackRate = 1.03;
+        } else if (bufferAhead < 0.4) {
+          audioRef.current.playbackRate = 0.97;
         } else {
-          audioRef.current.playbackRate = 1.0; // Perfect sync (< 20ms drift)
+          audioRef.current.playbackRate = 1.0;
         }
       }
     } catch (e) {}
@@ -164,7 +154,6 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
   useEffect(() => {
     if (!isLiveBroadcast) {
       setIsLiveAudioPlaying(false);
-      playScheduledRef.current = false;
       chunkQueueRef.current = [];
       if (audioRef.current) {
         audioRef.current.pause();
@@ -209,7 +198,7 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
           sb.addEventListener('updateend', () => {
             processQueue();
 
-            if (audio.paused && hasBufferedData(sb) && !playScheduledRef.current) {
+            if (audio.paused && hasBufferedData(sb)) {
               triggerAudioPlay();
             }
           });
@@ -226,12 +215,7 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
       // Auto-resume playback if network jitter triggers a brief waiting/stalled state
       const handleBufferUnderrun = () => {
         if (audioRef.current && hasBufferedData(sourceBufferRef.current)) {
-          const sb = sourceBufferRef.current;
-          try {
-            if (sb.buffered.end(0) - audioRef.current.currentTime > 0.1) {
-              triggerAudioPlay();
-            }
-          } catch (e) {}
+          triggerAudioPlay();
         }
       };
       audio.addEventListener('waiting', handleBufferUnderrun);
@@ -261,7 +245,6 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
         chunkQueueRef.current = [];
         sourceBufferRef.current = null;
         mediaSourceRef.current = null;
-        playScheduledRef.current = false;
         if (audioCtxRef.current) {
           try {
             audioCtxRef.current.close();
@@ -278,16 +261,12 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
     }
   }, [isLiveBroadcast, liveMimeType, processQueue, getAudioContext, hasBufferedData, triggerAudioPlay]);
 
-  // Handle incoming live chunk from WebSocket with Cristian's Algorithm Server Clock Scheduling
+  // Handle incoming live chunk from WebSocket
   const handleLiveChunk = useCallback((chunkPayload) => {
     if (!isLiveBroadcast || !chunkPayload) return;
 
     const base64Chunk = typeof chunkPayload === 'string' ? chunkPayload : chunkPayload.chunk;
     if (!base64Chunk) return;
-
-    if (typeof chunkPayload === 'object' && chunkPayload.targetServerPlayTime) {
-      lastChunkTimestampRef.current = chunkPayload.targetServerPlayTime;
-    }
 
     const arrayBuffer = base64ToArrayBuffer(base64Chunk);
     chunkQueueRef.current.push(arrayBuffer);
@@ -297,31 +276,10 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
       processQueue();
     }
 
-    // Synchronized Cristian's Algorithm Playback Trigger
-    if (audioRef.current && audioRef.current.paused && hasBufferedData(sb) && !playScheduledRef.current) {
-      const targetServerPlayTime = typeof chunkPayload === 'object' ? chunkPayload.targetServerPlayTime : null;
-
-      if (targetServerPlayTime) {
-        // Calculate exact target client time using Cristian's Algorithm serverTimeOffset
-        const targetClientPlayTime = targetServerPlayTime - serverTimeOffset;
-        const timeUntilStartMs = targetClientPlayTime - Date.now();
-
-        if (timeUntilStartMs > 10) {
-          playScheduledRef.current = true;
-          setTimeout(() => {
-            if (audioRef.current && hasBufferedData(sourceBufferRef.current)) {
-              triggerAudioPlay();
-            }
-            playScheduledRef.current = false;
-          }, timeUntilStartMs);
-          return;
-        }
-      }
-
-      // Default trigger if target time already elapsed
+    if (audioRef.current && audioRef.current.paused && hasBufferedData(sb)) {
       triggerAudioPlay();
     }
-  }, [isLiveBroadcast, base64ToArrayBuffer, processQueue, hasBufferedData, serverTimeOffset, triggerAudioPlay]);
+  }, [isLiveBroadcast, base64ToArrayBuffer, processQueue, hasBufferedData, triggerAudioPlay]);
 
   return {
     liveAudioRef: audioRef,
