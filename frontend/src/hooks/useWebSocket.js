@@ -5,17 +5,30 @@ import { WS_URL } from '../utils/config';
 function getStoredSessionId() {
   if (typeof window === 'undefined') return '';
   let id = localStorage.getItem('pulsr_session_id');
-  if (!id) {
+  if (!id || id === '[object Object]') {
     id = 'sess_' + Math.random().toString(36).substring(2, 11) + Date.now().toString(36);
     localStorage.setItem('pulsr_session_id', id);
   }
   return id;
 }
 
-// Get stored username from localStorage
+// Get stored username from localStorage with object string sanitization
 function getStoredUsername() {
   if (typeof window === 'undefined') return '';
-  return localStorage.getItem('pulsr_username') || '';
+  const val = localStorage.getItem('pulsr_username');
+  if (!val || val === '[object Object]' || typeof val !== 'string') {
+    localStorage.removeItem('pulsr_username');
+    return '';
+  }
+  return val;
+}
+
+// Helper: Sanitize username string
+function sanitizeUsername(u) {
+  if (typeof u === 'string' && u !== '[object Object]' && u.trim() && u.trim() !== 'undefined') {
+    return u.trim();
+  }
+  return '';
 }
 
 export function useWebSocket() {
@@ -102,7 +115,8 @@ export function useWebSocket() {
           case 'SESSION_INIT': {
             const activeSessionId = getStoredSessionId() || payload.sessionId;
             const storedUser = getStoredUsername();
-            const activeUsername = storedUser || payload.username || session.username;
+            const validPayloadUsername = sanitizeUsername(payload.username);
+            const activeUsername = storedUser || validPayloadUsername || session.username;
 
             localStorage.setItem('pulsr_session_id', activeSessionId);
             if (activeUsername) {
@@ -128,9 +142,10 @@ export function useWebSocket() {
               localStorage.setItem('pulsr_active_room', assignedRoomState.id);
             }
 
-            if (payload.username) {
-              localStorage.setItem('pulsr_username', payload.username);
-              setSession(prev => ({ ...prev, username: payload.username }));
+            const validUsername = sanitizeUsername(payload.username);
+            if (validUsername) {
+              localStorage.setItem('pulsr_username', validUsername);
+              setSession(prev => ({ ...prev, username: validUsername }));
             }
 
             setError(null);
@@ -265,8 +280,8 @@ export function useWebSocket() {
   // Actions
   const createRoom = useCallback((customUsername) => {
     if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) return;
-    const usernameStr = typeof customUsername === 'string' ? customUsername : '';
-    const activeUsername = usernameStr.trim() || session.username || getStoredUsername();
+    const validCustom = sanitizeUsername(customUsername);
+    const activeUsername = validCustom || session.username || getStoredUsername();
     if (activeUsername) {
       localStorage.setItem('pulsr_username', activeUsername);
     }
@@ -281,8 +296,8 @@ export function useWebSocket() {
 
   const joinRoom = useCallback((roomId, customUsername) => {
     if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN || !roomId) return;
-    const usernameStr = typeof customUsername === 'string' ? customUsername : '';
-    const activeUsername = usernameStr.trim() || session.username || getStoredUsername();
+    const validCustom = sanitizeUsername(customUsername);
+    const activeUsername = validCustom || session.username || getStoredUsername();
     if (activeUsername) {
       localStorage.setItem('pulsr_username', activeUsername);
     }
@@ -352,15 +367,16 @@ export function useWebSocket() {
   }, []);
 
   const updateProfile = useCallback((newUsername) => {
-    if (!newUsername || typeof newUsername !== 'string') return;
-    const cleanUsername = newUsername.trim();
-    localStorage.setItem('pulsr_username', cleanUsername);
-    setSession(prev => ({ ...prev, username: cleanUsername }));
+    const validUsername = sanitizeUsername(newUsername);
+    if (!validUsername) return;
+
+    localStorage.setItem('pulsr_username', validUsername);
+    setSession(prev => ({ ...prev, username: validUsername }));
 
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
       socketRef.current.send(JSON.stringify({
         type: 'UPDATE_PROFILE',
-        payload: { username: cleanUsername, sessionId: session.sessionId }
+        payload: { username: validUsername, sessionId: session.sessionId }
       }));
     }
   }, [session.sessionId]);
