@@ -5,7 +5,6 @@ import { useEffect, useRef, useState, useCallback } from 'react';
  * Media Source Extensions (MSE) Live Audio Receiver Hook
  * Receives WebM Opus audio chunks over WebSockets and feeds them into HTML5 MediaSource SourceBuffer.
  * Connects Web Audio AnalyserNode to the Audio element for listener speaker output and visualizer analysis.
- * Includes automatic buffer pruning with strict timestamp guards to prevent QuotaExceededError and buffer exhaustion.
  */
 export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;codecs=opus') {
   const audioRef = useRef(null);
@@ -82,10 +81,36 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
 
   // Setup Web Audio API Analyser for Listener Visualizer
   const getAudioContext = useCallback(() => {
-    if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
-      audioCtxRef.current.resume().catch(() => {});
+    if (!audioRef.current || sourceRef.current) {
+      if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+        audioCtxRef.current.resume().catch(() => {});
+      }
+      return analyserRef.current;
     }
-    return analyserRef.current;
+
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      const ctx = new AudioCtx();
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 128;
+
+      const source = ctx.createMediaElementSource(audioRef.current);
+      source.connect(analyser);
+      analyser.connect(ctx.destination);
+
+      audioCtxRef.current = ctx;
+      analyserRef.current = analyser;
+      sourceRef.current = source;
+
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => {});
+      }
+
+      return analyser;
+    } catch (err) {
+      console.warn('Listener Web Audio setup notice:', err);
+      return null;
+    }
   }, []);
 
   // Initialize MediaSource when Live Broadcast is active
@@ -122,26 +147,6 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
       const mediaSource = new MediaSource();
       mediaSourceRef.current = mediaSource;
       audio.src = URL.createObjectURL(mediaSource);
-
-      // Safely initialize Web Audio Analyser AFTER audio.src URL is assigned
-      try {
-        if (!sourceRef.current) {
-          const AudioCtx = window.AudioContext || window.webkitAudioContext;
-          const ctx = new AudioCtx();
-          const analyser = ctx.createAnalyser();
-          analyser.fftSize = 128;
-
-          const source = ctx.createMediaElementSource(audio);
-          source.connect(analyser);
-          analyser.connect(ctx.destination);
-
-          audioCtxRef.current = ctx;
-          analyserRef.current = analyser;
-          sourceRef.current = source;
-        }
-      } catch (eErr) {
-        console.warn('Listener Web Audio Analyser setup notice:', eErr);
-      }
 
       const handleSourceOpen = () => {
         try {
@@ -181,6 +186,8 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
             setIsLiveAudioPlaying(true);
             getAudioContext();
           }).catch(() => {});
+        } else if (audioRef.current && !audioRef.current.paused) {
+          getAudioContext();
         }
       };
       window.addEventListener('touchstart', unlockPlay, { passive: true });
