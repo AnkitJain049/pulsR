@@ -2,45 +2,22 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 
 /**
  * useLiveAudioStream.js
- * Web Audio API Ultra Low-Latency Live Receiver Hook
- * Decodes Opus/PCM audio chunks over WebSockets using AudioContext.decodeAudioData
- * with a 50ms cap on jitter buffer drift to eliminate accumulated stream lag.
+ * Media Source Extensions (MSE) Live Audio Receiver Hook
+ * Receives WebM Opus audio chunks over WebSockets and feeds them into HTML5 MediaSource SourceBuffer.
+ * Connects Web Audio AnalyserNode to the Audio element for listener speaker output and visualizer analysis.
  */
-export function useLiveAudioStream(isLiveBroadcast) {
+export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;codecs=opus') {
+  const audioRef = useRef(null);
+  const mediaSourceRef = useRef(null);
+  const sourceBufferRef = useRef(null);
+  const chunkQueueRef = useRef([]);
   const audioCtxRef = useRef(null);
   const analyserRef = useRef(null);
-  const nextPlayTimeRef = useRef(0);
-  const isPlayingRef = useRef(false);
 
   const [isLiveAudioPlaying, setIsLiveAudioPlaying] = useState(false);
   const [liveError, setLiveError] = useState(null);
 
-  // Initialize Web Audio API AudioContext & AnalyserNode
-  const getAudioContext = useCallback(() => {
-    if (!audioCtxRef.current) {
-      try {
-        const AudioCtx = window.AudioContext || window.webkitAudioContext;
-        const ctx = new AudioCtx();
-        const analyser = ctx.createAnalyser();
-        analyser.fftSize = 128;
-        analyser.connect(ctx.destination);
-
-        audioCtxRef.current = ctx;
-        analyserRef.current = analyser;
-      } catch (err) {
-        console.error('Failed to initialize AudioContext:', err);
-        setLiveError('Web Audio API not supported on this browser.');
-      }
-    }
-    
-    if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
-      audioCtxRef.current.resume().catch(() => {});
-    }
-
-    return { ctx: audioCtxRef.current, analyser: analyserRef.current };
-  }, []);
-
-  // Convert Base64 string to ArrayBuffer
+  // Convert Base64 string to Uint8Array ArrayBuffer
   const base64ToArrayBuffer = useCallback((base64) => {
     const binaryString = window.atob(base64);
     const len = binaryString.length;
@@ -51,65 +28,142 @@ export function useLiveAudioStream(isLiveBroadcast) {
     return bytes.buffer;
   }, []);
 
-  // Handle incoming live chunk from WebSocket
-  const handleLiveChunk = useCallback(async (base64Chunk) => {
-    if (!isLiveBroadcast || !base64Chunk) return;
+  // Process queued audio chunks into MSE SourceBuffer
+  const processQueue = useCallback(() => {
+    const sb = sourceBufferRef.current;
+    if (!sb || sb.updating || chunkQueueRef.current.length === 0) return;
 
     try {
-      const { ctx, analyser } = getAudioContext();
-      if (!ctx || !analyser) return;
-
-      const arrayBuffer = base64ToArrayBuffer(base64Chunk);
-      
-      // Decode audio chunk ArrayBuffer to AudioBuffer
-      ctx.decodeAudioData(arrayBuffer, (audioBuffer) => {
-        if (!audioBuffer) return;
-
-        const source = ctx.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(analyser);
-
-        const currentTime = ctx.currentTime;
-        // Jitter Buffer Cap: If scheduled playback time is more than 80ms ahead or behind, snap to current time
-        if (nextPlayTimeRef.current - currentTime > 0.08 || nextPlayTimeRef.current < currentTime) {
-          nextPlayTimeRef.current = currentTime;
-        }
-
-        const startTime = nextPlayTimeRef.current;
-        source.start(startTime);
-        nextPlayTimeRef.current = startTime + audioBuffer.duration;
-
-        if (!isPlayingRef.current) {
-          isPlayingRef.current = true;
-          setIsLiveAudioPlaying(true);
-        }
-      }, (decodeErr) => {
-        // Suppress initial header chunk decode warnings
-      });
-
+      const nextChunk = chunkQueueRef.current.shift();
+      sb.appendBuffer(nextChunk);
     } catch (err) {
-      console.warn('Live chunk processing notice:', err);
+      // Suppress minor buffer boundary notices
     }
-  }, [isLiveBroadcast, getAudioContext, base64ToArrayBuffer]);
+  }, []);
 
-  // Clean up AudioContext when broadcast ends
+  // Setup Web Audio API Analyser for Listener Visualizer
+  const getAudioContext = useCallback(() => {
+    if (!audioRef.current || analyserRef.current) return analyserRef.current;
+
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      const ctx = new AudioCtx();
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 128;
+
+      const source = ctx.createMediaElementSource(audioRef.current);
+      source.connect(analyser);
+      analyser.connect(ctx.destination);
+
+      audioCtxRef.current = ctx;
+      analyserRef.current = analyser;
+      return analyser;
+    } catch (err) {
+      console.warn('Listener Web Audio API notice:', err);
+      return null;
+    }
+  }, []);
+
+  // Initialize MediaSource when Live Broadcast is active
   useEffect(() => {
     if (!isLiveBroadcast) {
-      isPlayingRef.current = false;
       setIsLiveAudioPlaying(false);
-      nextPlayTimeRef.current = 0;
-
-      if (audioCtxRef.current) {
-        try {
-          audioCtxRef.current.close();
-        } catch (e) {}
-        audioCtxRef.current = null;
-        analyserRef.current = null;
+      chunkQueueRef.current = [];
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.removeAttribute('src');
       }
+      return;
     }
-  }, [isLiveBroadcast]);
+
+    const audio = new Audio();
+    audio.crossOrigin = 'anonymous';
+    audio.preload = 'auto';
+    audioRef.current = audio;
+
+    if (typeof MediaSource === 'undefined') {
+      setLiveError('MediaSource Extensions (MSE) are not supported on this browser.');
+      return;
+    }
+
+    const mediaSource = new MediaSource();
+    mediaSourceRef.current = mediaSource;
+    audio.src = URL.createObjectURL(mediaSource);
+
+    const handleSourceOpen = () => {
+      try {
+        const mime = liveMimeType || 'audio/webm;codecs=opus';
+        const targetMime = (MediaSource.isTypeSupported(mime))
+          ? mime
+          : (MediaSource.isTypeSupported('audio/webm') ? 'audio/webm' : '');
+
+        if (!targetMime) {
+          console.warn('Fallback: Browser using default MediaSource codec');
+        }
+
+        const sb = mediaSource.addSourceBuffer(targetMime || 'audio/webm');
+        sourceBufferRef.current = sb;
+
+        sb.addEventListener('updateend', () => {
+          processQueue();
+          if (audio.paused && sb.buffered.length > 0) {
+            audio.play().then(() => {
+              setIsLiveAudioPlaying(true);
+              getAudioContext();
+            }).catch(e => {
+              console.warn('Live audio waiting for user gesture unlock:', e);
+            });
+          }
+        });
+
+        processQueue();
+      } catch (err) {
+        console.error('Failed to create SourceBuffer:', err);
+        setLiveError('Failed to initialize live audio decoder.');
+      }
+    };
+
+    mediaSource.addEventListener('sourceopen', handleSourceOpen);
+
+    // Global gesture listener to trigger playback if browser blocks autoplay
+    const unlockPlay = () => {
+      if (audioRef.current && audioRef.current.paused && sourceBufferRef.current?.buffered.length > 0) {
+        audioRef.current.play().then(() => {
+          setIsLiveAudioPlaying(true);
+          getAudioContext();
+        }).catch(() => {});
+      }
+    };
+    window.addEventListener('touchstart', unlockPlay, { passive: true });
+    window.addEventListener('click', unlockPlay, { passive: true });
+
+    return () => {
+      window.removeEventListener('touchstart', unlockPlay);
+      window.removeEventListener('click', unlockPlay);
+      mediaSource.removeEventListener('sourceopen', handleSourceOpen);
+      chunkQueueRef.current = [];
+      sourceBufferRef.current = null;
+      mediaSourceRef.current = null;
+      audio.pause();
+      audio.removeAttribute('src');
+    };
+  }, [isLiveBroadcast, liveMimeType, processQueue, getAudioContext]);
+
+  // Handle incoming live chunk from WebSocket
+  const handleLiveChunk = useCallback((base64Chunk) => {
+    if (!isLiveBroadcast || !base64Chunk) return;
+    const arrayBuffer = base64ToArrayBuffer(base64Chunk);
+
+    chunkQueueRef.current.push(arrayBuffer);
+
+    const sb = sourceBufferRef.current;
+    if (sb && !sb.updating) {
+      processQueue();
+    }
+  }, [isLiveBroadcast, base64ToArrayBuffer, processQueue]);
 
   return {
+    liveAudioRef: audioRef,
     isLiveAudioPlaying,
     liveError,
     handleLiveChunk,
