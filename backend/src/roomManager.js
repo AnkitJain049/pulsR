@@ -1,64 +1,81 @@
-import mongoose from 'mongoose';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { generateRoomCode, generateFunnyUsername } from './utils.js';
+import { Room as RoomModel } from './models/Room.js';
+import { Track as TrackModel } from './models/Track.js';
 
-// Optional MongoDB Mongoose Schema for persistent 12-hour Room TTL
-const roomSchema = new mongoose.Schema({
-  roomId: { type: String, required: true, unique: true },
-  adminSessionId: { type: String, required: true },
-  track: { type: Object, default: null },
-  playback: {
-    isPlaying: { type: Boolean, default: false },
-    trackOffset: { type: Number, default: 0 },
-    serverStartTime: { type: Number, default: 0 }
-  },
-  createdAt: { type: Date, default: Date.now, expires: 43200 } // Auto-delete room after 12 hours (43200 sec)
-});
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const uploadsDir = path.join(__dirname, '../uploads');
 
-const RoomModel = mongoose.models.Room || mongoose.model('Room', roomSchema);
+/**
+ * Delete a physical audio file from backend/uploads/ disk
+ */
+export function deleteTrackFile(filename) {
+  if (!filename) return;
+  try {
+    const filePath = path.join(uploadsDir, filename);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      console.log(`🗑️ Deleted track file from disk: ${filename}`);
+    }
+  } catch (err) {
+    console.error(`Failed to delete track file ${filename}:`, err);
+  }
+}
 
+/**
+ * Cleanup any orphaned audio files in uploads/ that are not linked to any active room or MongoDB record
+ */
+export async function cleanupOrphanedUploads() {
+  try {
+    if (!fs.existsSync(uploadsDir)) return;
+    const diskFiles = fs.readdirSync(uploadsDir);
+    
+    // Get all active filenames in MongoDB
+    const activeRooms = await RoomModel.find({ 'track.filename': { $exists: true } }).select('track.filename');
+    const activeTracks = await TrackModel.find().select('filename');
+    
+    const activeFilenames = new Set([
+      ...activeRooms.map(r => r.track?.filename).filter(Boolean),
+      ...activeTracks.map(t => t.filename).filter(Boolean)
+    ]);
+
+    for (const file of diskFiles) {
+      if (file === '.gitkeep') continue;
+      if (!activeFilenames.has(file)) {
+        deleteTrackFile(file);
+      }
+    }
+  } catch (err) {
+    console.error('Orphaned upload cleanup warning:', err);
+  }
+}
+
+/**
+ * Ephemeral In-Memory Room State Manager with MongoDB Persistence & Auto Disk Cleanup
+ */
 class RoomManager {
   constructor() {
-    this.rooms = new Map(); // In-Memory Active Room Store { roomId -> RoomObject }
+    this.rooms = new Map();
   }
 
   /**
-   * Format room state object to send across WebSockets (strips raw WS sockets)
-   * @param {Object} room 
-   * @returns {Object} formatted room state
-   */
-  formatRoomState(room) {
-    if (!room) return null;
-    const clientList = Array.from(room.clients.values()).map(c => ({
-      sessionId: c.sessionId,
-      username: c.username,
-      role: c.role
-    }));
-
-    return {
-      id: room.id,
-      adminSessionId: room.adminSessionId,
-      track: room.track,
-      playback: room.playback,
-      isLiveBroadcast: Boolean(room.isLiveBroadcast),
-      liveMimeType: room.liveMimeType || 'audio/webm;codecs=opus',
-      clients: clientList,
-      clientCount: clientList.length
-    };
-  }
-
-  /**
-   * Sync room state to MongoDB (non-blocking async update)
+   * Persist room state to MongoDB "pulsR" database
    */
   async syncToDatabase(room) {
     if (!room) return;
     try {
-      if (mongoose.connection.readyState !== 1) return;
       await RoomModel.findOneAndUpdate(
         { roomId: room.id },
         {
+          roomId: room.id,
           adminSessionId: room.adminSessionId,
           track: room.track,
-          playback: room.playback
+          playback: room.playback,
+          activeClientsCount: room.clients.size,
+          lastActiveAt: new Date()
         },
         { upsert: true, new: true }
       );
@@ -74,6 +91,7 @@ class RoomManager {
     if (!roomId) return null;
     const cleanId = roomId.trim().toUpperCase();
 
+    // Return if already in RAM
     if (this.rooms.has(cleanId)) {
       return this.rooms.get(cleanId);
     }
@@ -109,6 +127,7 @@ class RoomManager {
     let roomId;
     let attempts = 0;
     
+    // Ensure unique 4-char room code
     do {
       roomId = generateRoomCode();
       attempts++;
@@ -146,37 +165,30 @@ class RoomManager {
 
   /**
    * Join a room (checks RAM, then MongoDB if evicted)
-   * Purges duplicate client entries matching the same sessionId upon page refresh.
+   * @param {string} roomId 
+   * @param {WebSocket} socket 
+   * @param {string} sessionId 
+   * @param {string} [customUsername] 
+   * @returns {Promise<Object|null>} { room, clientData }
    */
   async joinRoom(roomId, socket, sessionId, customUsername) {
     let room = this.getRoom(roomId);
     if (!room) {
+      // Attempt restoration from MongoDB if evicted from RAM
       room = await this.restoreFromDatabase(roomId);
     }
     if (!room) return null;
 
-    // Purge any stale client entry in room.clients with the SAME sessionId on reconnect/refresh
-    for (const [existingSocket, existingClient] of room.clients.entries()) {
-      if (existingClient.sessionId === sessionId || existingSocket === socket) {
-        room.clients.delete(existingSocket);
-        try {
-          if (existingSocket !== socket && existingSocket.readyState === 1) {
-            existingSocket.close();
-          }
-        } catch (e) {}
-      }
-    }
-
     // Generate unique room username if not provided
     let username = customUsername;
-    if (!username || typeof username !== 'string' || username === '[object Object]') {
+    if (!username) {
       const existingUsernames = new Set(Array.from(room.clients.values()).map(c => c.username));
       do {
         username = generateFunnyUsername();
       } while (existingUsernames.has(username));
     }
 
-    // Determine role (ADMIN if session matches creator or room is empty)
+    // Determine role (ADMIN if session matches creator or empty, else LISTENER)
     const isRoomAdmin = room.adminSessionId === sessionId || room.clients.size === 0;
     if (isRoomAdmin) {
       room.adminSessionId = sessionId; // Lock admin session
@@ -192,6 +204,8 @@ class RoomManager {
 
   /**
    * Remove a socket connection from any room it belongs to
+   * @param {WebSocket} socket 
+   * @returns {Object|null} { room, leftClient }
    */
   leaveRoom(socket) {
     for (const [roomId, room] of this.rooms.entries()) {
@@ -199,20 +213,25 @@ class RoomManager {
         const leftClient = room.clients.get(socket);
         room.clients.delete(socket);
 
-        // If room is completely empty, set a timer or check discard
-        if (room.clients.size === 0) {
-          // Keep room available in MongoDB TTL cache for 12 hours
-        } else if (leftClient.role === 'ADMIN') {
-          // Transfer admin role to next oldest connected client in room
-          const nextClientSocket = room.clients.keys().next().value;
-          if (nextClientSocket) {
-            const nextClient = room.clients.get(nextClientSocket);
-            nextClient.role = 'ADMIN';
-            room.adminSessionId = nextClient.sessionId;
-          }
+        // If admin left and clients still exist, reassign ADMIN role to next client
+        if (leftClient.role === 'ADMIN' && room.clients.size > 0) {
+          const [nextSocket, nextClient] = room.clients.entries().next().value;
+          nextClient.role = 'ADMIN';
+          room.adminSessionId = nextClient.sessionId;
         }
 
         this.syncToDatabase(room);
+
+        // Gracefully clean up empty rooms after 5 minutes of inactivity in RAM
+        if (room.clients.size === 0) {
+          setTimeout(() => {
+            const currentRoom = this.rooms.get(roomId);
+            if (currentRoom && currentRoom.clients.size === 0) {
+              this.rooms.delete(roomId);
+            }
+          }, 5 * 60 * 1000);
+        }
+
         return { room, leftClient };
       }
     }
@@ -220,57 +239,105 @@ class RoomManager {
   }
 
   /**
-   * Delete room permanently from RAM and MongoDB when Host discards session
+   * Permanently delete room from MongoDB & RAM, and unlink physical audio file from disk
    */
   async deleteRoom(roomId) {
-    if (!roomId) return false;
+    if (!roomId) return null;
     const cleanId = roomId.trim().toUpperCase();
-    
-    if (this.rooms.has(cleanId)) {
-      const room = this.rooms.get(cleanId);
-      room.clients.clear();
-      this.rooms.delete(cleanId);
+    const room = this.getRoom(cleanId);
+
+    // Delete associated physical audio file from disk
+    if (room?.track?.filename) {
+      deleteTrackFile(room.track.filename);
     }
 
     try {
-      if (mongoose.connection.readyState === 1) {
-        await RoomModel.deleteOne({ roomId: cleanId });
+      const dbRoom = await RoomModel.findOne({ roomId: cleanId });
+      if (dbRoom?.track?.filename) {
+        deleteTrackFile(dbRoom.track.filename);
+        try {
+          await TrackModel.deleteOne({ filename: dbRoom.track.filename });
+        } catch (tErr) {}
       }
+      await RoomModel.deleteOne({ roomId: cleanId });
     } catch (err) {
-      console.error('Error deleting room from DB:', err);
+      console.error('Error deleting room from MongoDB:', err);
     }
 
-    return true;
+    if (room) {
+      this.rooms.delete(cleanId);
+    }
+
+    return room;
   }
 
   /**
-   * Set active track for room
+   * Update room track info & delete previous track file from disk
    */
-  setRoomTrack(roomId, trackData) {
+  setRoomTrack(roomId, trackInfo) {
     const room = this.getRoom(roomId);
     if (!room) return null;
-    room.track = trackData;
+
+    // Delete previous audio file if replaced
+    if (room.track?.filename && room.track.filename !== trackInfo.filename) {
+      deleteTrackFile(room.track.filename);
+      try {
+        TrackModel.deleteOne({ filename: room.track.filename }).catch(() => {});
+      } catch (e) {}
+    }
+
+    room.track = trackInfo;
     room.playback = {
       isPlaying: false,
       trackOffset: 0,
       serverStartTime: 0
     };
+
     this.syncToDatabase(room);
     return room;
   }
 
   /**
-   * Update playback state (PLAY / PAUSE / SEEK)
+   * Update playback state (play/pause/seek)
    */
-  updatePlayback(roomId, playbackState) {
+  updatePlayback(roomId, { isPlaying, trackOffset, serverStartTime }) {
     const room = this.getRoom(roomId);
     if (!room) return null;
-    room.playback = {
-      ...room.playback,
-      ...playbackState
-    };
+
+    room.playback.isPlaying = isPlaying;
+    room.playback.trackOffset = Math.max(0, trackOffset);
+    room.playback.serverStartTime = isPlaying ? (serverStartTime || Date.now()) : 0;
+
     this.syncToDatabase(room);
     return room;
+  }
+
+  /**
+   * Format room object for client JSON broadcasting
+   */
+  formatRoomState(room) {
+    if (!room) return null;
+
+    const clientsList = Array.from(room.clients.values()).map(c => ({
+      sessionId: c.sessionId,
+      username: c.username,
+      role: c.role
+    }));
+
+    return {
+      id: room.id,
+      adminSessionId: room.adminSessionId,
+      clients: clientsList,
+      clientCount: clientsList.length,
+      track: room.track,
+      playback: {
+        isPlaying: room.playback.isPlaying,
+        trackOffset: room.playback.trackOffset,
+        serverStartTime: room.playback.serverStartTime
+      },
+      isLiveBroadcast: room.isLiveBroadcast || false,
+      liveMimeType: room.liveMimeType || null
+    };
   }
 }
 
