@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState } from 'react';
 import { Play, Pause, Upload, Volume2, VolumeX, Copy, Check, Sliders, AlertCircle, Info, Radio, Disc } from 'lucide-react';
 import { BACKEND_URL } from '../utils/config';
 
@@ -8,6 +8,8 @@ export function Player({
   session,
   socketRef,
   streamerRef,
+  hostMonitoring,
+  setHostMonitoring,
   updateTrack,
   playTrack,
   pauseTrack,
@@ -269,34 +271,63 @@ export function Player({
 
             {/* TAB 2: Live System / Spotify Audio Broadcaster */}
             {activeTab === 'live' && (
-              <div className="p-5 rounded-2xl border border-white/10 bg-zinc-900/60 space-y-3">
-                <div className="flex items-center justify-between">
+              <div className="p-5 rounded-2xl border border-white/10 bg-zinc-900/60 space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <h4 className="text-xs font-bold text-white flex items-center space-x-1.5">
                       <span>Stream Spotify, Apple Music & Desktop Audio</span>
                     </h4>
                     <p className="text-[11px] text-zinc-400 mt-0.5">
-                      Select your **Spotify Tab**, **Apple Music Tab**, or **System Audio** and make sure <span className="text-[#c1ff72] font-semibold">"Share Audio"</span> is checked in the browser prompt.
+                      Select your <span className="text-white font-semibold">Spotify Tab</span>, <span className="text-white font-semibold">Apple Music Tab</span>, or <span className="text-white font-semibold">System Audio</span> and check <span className="text-[#c1ff72] font-semibold">"Share Audio"</span> in the browser prompt.
                     </p>
                   </div>
 
-                  {!isLiveBroadcasting ? (
-                    <button
-                      onClick={handleStartLiveBroadcast}
-                      className="px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs shadow-lg shadow-red-500/30 transition flex items-center space-x-2 shrink-0"
-                    >
-                      <Radio className="w-4 h-4 animate-pulse" />
-                      <span>Start Live Broadcast</span>
-                    </button>
-                  ) : (
-                    <button
-                      onClick={handleStopLiveBroadcast}
-                      className="px-5 py-2.5 rounded-xl bg-zinc-800 border border-red-500/40 text-red-400 hover:bg-red-500/20 font-bold text-xs transition shrink-0"
-                    >
-                      Stop Broadcast
-                    </button>
-                  )}
+                  <div className="flex items-center space-x-2">
+                    {!isLiveBroadcasting ? (
+                      <button
+                        onClick={handleStartLiveBroadcast}
+                        className="px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs shadow-lg shadow-red-500/30 transition flex items-center space-x-2 shrink-0"
+                      >
+                        <Radio className="w-4 h-4 animate-pulse" />
+                        <span>Start Live Broadcast</span>
+                      </button>
+                    ) : (
+                      <button
+                        onClick={handleStopLiveBroadcast}
+                        className="px-5 py-2.5 rounded-xl bg-zinc-800 border border-red-500/40 text-red-400 hover:bg-red-500/20 font-bold text-xs transition shrink-0"
+                      >
+                        Stop Broadcast
+                      </button>
+                    )}
+                  </div>
                 </div>
+
+                {/* Host Speaker Monitoring Toggle & Hint */}
+                {isLiveBroadcasting && (
+                  <div className="p-3.5 rounded-xl bg-black/40 border border-white/10 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <button
+                        onClick={() => setHostMonitoring(!hostMonitoring)}
+                        className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center space-x-2 border ${
+                          hostMonitoring
+                            ? 'bg-[#c1ff72]/20 border-[#c1ff72]/40 text-[#c1ff72]'
+                            : 'bg-zinc-800 border-white/10 text-zinc-400 hover:text-white'
+                        }`}
+                      >
+                        {hostMonitoring ? <Volume2 className="w-3.5 h-3.5 text-[#c1ff72]" /> : <VolumeX className="w-3.5 h-3.5" />}
+                        <span>{hostMonitoring ? '🔊 Host Speaker Monitoring: ON' : '🔇 Host Speaker Monitoring: OFF'}</span>
+                      </button>
+
+                      <span className="text-[11px] text-[#c1ff72] font-mono font-medium">
+                        {hostMonitoring ? 'Synced Room Stream Playing' : 'Host Speakers Muted'}
+                      </span>
+                    </div>
+
+                    <p className="text-[11px] text-zinc-400 leading-relaxed">
+                      💡 <strong className="text-white">Tip for 100% Sync:</strong> Mute or lower the volume of your Spotify / Apple Music app window, and listen through PULSR so your laptop speakers match all listeners down to the millisecond!
+                    </p>
+                  </div>
+                )}
 
                 {liveStreamError && (
                   <p className="text-xs text-red-400 bg-red-500/10 p-2.5 rounded-xl border border-red-500/20">{liveStreamError}</p>

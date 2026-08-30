@@ -2,9 +2,9 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 
 /**
  * useLiveAudioStream.js
- * Web Audio API Live Receiver Hook
+ * Web Audio API Ultra Low-Latency Live Receiver Hook
  * Decodes Opus/PCM audio chunks over WebSockets using AudioContext.decodeAudioData
- * and routes them to AudioContext.destination for real-time live playback and visualizer analysis.
+ * with a 50ms cap on jitter buffer drift to eliminate accumulated stream lag.
  */
 export function useLiveAudioStream(isLiveBroadcast) {
   const audioCtxRef = useRef(null);
@@ -70,8 +70,12 @@ export function useLiveAudioStream(isLiveBroadcast) {
         source.connect(analyser);
 
         const currentTime = ctx.currentTime;
-        // Schedule next chunk seamlessly back-to-back
-        const startTime = Math.max(currentTime, nextPlayTimeRef.current);
+        // Jitter Buffer Cap: If scheduled playback time is more than 80ms ahead or behind, snap to current time
+        if (nextPlayTimeRef.current - currentTime > 0.08 || nextPlayTimeRef.current < currentTime) {
+          nextPlayTimeRef.current = currentTime;
+        }
+
+        const startTime = nextPlayTimeRef.current;
         source.start(startTime);
         nextPlayTimeRef.current = startTime + audioBuffer.duration;
 

@@ -17,6 +17,7 @@ function MainAppContent() {
   const { roomId: urlRoomId } = useParams();
 
   const [showExitModal, setShowExitModal] = useState(false);
+  const [hostMonitoring, setHostMonitoring] = useState(true); // Host stream monitoring toggle
   const isExitingRef = useRef(false);
   const streamerRef = useRef(null);
 
@@ -72,19 +73,20 @@ function MainAppContent() {
     manualResync
   } = useAudioSync(track, playback, totalOffset);
 
-  // Listener hook for receiving live audio chunks from Spotify/Apple Music capture
-  const { handleLiveChunk, listenerAnalyserRef, getAudioContext } = useLiveAudioStream(isLiveBroadcast && !isHost);
+  // Live Stream Receiver Hook (Active for Listeners OR Host with hostMonitoring ON)
+  const isReceiverActive = isLiveBroadcast && (!isHost || hostMonitoring);
+  const { handleLiveChunk, listenerAnalyserRef, getAudioContext } = useLiveAudioStream(isReceiverActive);
 
   useEffect(() => {
-    if (latestLiveChunk?.chunk && isLiveBroadcast && !isHost) {
+    if (latestLiveChunk?.chunk && isReceiverActive) {
       handleLiveChunk(latestLiveChunk.chunk);
     }
-  }, [latestLiveChunk, isLiveBroadcast, isHost, handleLiveChunk]);
+  }, [latestLiveChunk, isReceiverActive, handleLiveChunk]);
 
-  // Global user gesture listener unlock for Web Audio AudioContext on listener devices
+  // Global user gesture listener unlock for Web Audio AudioContext
   useEffect(() => {
     const unlockListenerAudio = () => {
-      if (isLiveBroadcast && !isHost) {
+      if (isReceiverActive) {
         getAudioContext();
       }
     };
@@ -94,7 +96,7 @@ function MainAppContent() {
       window.removeEventListener('touchstart', unlockListenerAudio);
       window.removeEventListener('click', unlockListenerAudio);
     };
-  }, [isLiveBroadcast, isHost, getAudioContext]);
+  }, [isReceiverActive, getAudioContext]);
 
   const isPlaying = playback?.isPlaying || false;
 
@@ -197,6 +199,8 @@ function MainAppContent() {
                 session={session}
                 socketRef={socketRef}
                 streamerRef={streamerRef}
+                hostMonitoring={hostMonitoring}
+                setHostMonitoring={setHostMonitoring}
                 updateTrack={updateTrack}
                 playTrack={playTrack}
                 pauseTrack={pauseTrack}

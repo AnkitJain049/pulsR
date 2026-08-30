@@ -1,7 +1,7 @@
 /**
  * PulsrLiveStreamer.js
  * Captures System/Tab Audio (Spotify, Apple Music, YouTube, Desktop Sound)
- * via navigator.mediaDevices.getDisplayMedia and streams 100ms Opus audio chunks over WebSockets.
+ * via navigator.mediaDevices.getDisplayMedia and streams 50ms Opus audio chunks over WebSockets.
  */
 export class PulsrLiveStreamer {
   constructor(socketRef = null) {
@@ -144,7 +144,7 @@ export class PulsrLiveStreamer {
       };
 
       this.isBroadcasting = true;
-      recorder.start(100); // Send 100ms Opus audio chunks for sub-100ms latency
+      recorder.start(50); // Ultra low-latency 50ms Opus audio chunk slicing
       return true;
 
     } catch (err) {
