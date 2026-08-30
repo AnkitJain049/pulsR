@@ -39,10 +39,10 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
     return bytes.buffer;
   }, []);
 
-  // Process queued audio chunks into MSE SourceBuffer
+  // Process queued audio chunks into MSE SourceBuffer sequentially
   const processQueue = useCallback(() => {
     const sb = sourceBufferRef.current;
-    if (!sb || sb.updating || chunkQueueRef.current.length === 0) return;
+    if (!sb || sb.updating || chunkQueueRef.current.length === 0 || !mediaSourceRef.current || mediaSourceRef.current.readyState !== 'open') return;
 
     try {
       const nextChunk = chunkQueueRef.current.shift();

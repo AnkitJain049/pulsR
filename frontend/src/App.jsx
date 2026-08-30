@@ -17,7 +17,7 @@ function MainAppContent() {
   const { roomId: urlRoomId } = useParams();
 
   const [showExitModal, setShowExitModal] = useState(false);
-  const [hostMonitoring, setHostMonitoring] = useState(true); // Host stream monitoring toggle
+  const [hostMonitoring, setHostMonitoring] = useState(false); // Default false to prevent infinite audio feedback loops
   const isExitingRef = useRef(false);
   const streamerRef = useRef(null);
 
@@ -91,7 +91,7 @@ function MainAppContent() {
       }
     };
     window.addEventListener('touchstart', unlockListenerAudio, { passive: true });
-    window.addEventListener('click', unlockListenerAudio, { passive: true });
+    window.addEventListener('click', unlockUnlock => unlockListenerAudio(), { passive: true });
     return () => {
       window.removeEventListener('touchstart', unlockListenerAudio);
       window.removeEventListener('click', unlockListenerAudio);
