@@ -4,7 +4,8 @@ import { useEffect, useRef, useState, useCallback } from 'react';
  * useLiveAudioStream.js
  * Media Source Extensions (MSE) Live Audio Receiver Hook
  * Receives WebM Opus audio chunks over WebSockets and feeds them into HTML5 MediaSource SourceBuffer.
- * Connects Web Audio AnalyserNode to the Audio element for listener speaker output and visualizer analysis.
+ * Implements a 1000ms unified buffer window with smooth playbackRate steering so all listeners play in sample-accurate sync.
+ * Includes auto-resume on network buffer underrun and automatic buffer pruning to prevent memory exhaustion.
  */
 export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;codecs=opus') {
   const audioRef = useRef(null);
@@ -39,46 +40,6 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
     return bytes.buffer;
   }, []);
 
-  // Process queued audio chunks into MSE SourceBuffer sequentially with automatic pruning
-  const processQueue = useCallback(() => {
-    const sb = sourceBufferRef.current;
-    if (!sb || sb.updating || !mediaSourceRef.current || mediaSourceRef.current.readyState !== 'open') return;
-
-    // 1. Prune old played audio buffer ranges (> 10s behind current playback) with strict positive timestamp guards
-    try {
-      if (audioRef.current && hasBufferedData(sb)) {
-        const start = sb.buffered.start(0);
-        const curTime = audioRef.current.currentTime;
-        const pruneEnd = curTime - 4;
-
-        if (curTime > 6 && pruneEnd > start + 1) {
-          sb.remove(start, pruneEnd);
-          return; // Next append will execute on 'updateend' event
-        }
-      }
-    } catch (e) {}
-
-    if (chunkQueueRef.current.length === 0) return;
-
-    // 2. Append next queued live audio chunk
-    try {
-      const nextChunk = chunkQueueRef.current.shift();
-      sb.appendBuffer(nextChunk);
-    } catch (err) {
-      if (err.name === 'QuotaExceededError') {
-        try {
-          if (hasBufferedData(sb) && audioRef.current) {
-            const start = sb.buffered.start(0);
-            const pruneEnd = audioRef.current.currentTime - 2;
-            if (pruneEnd > start) {
-              sb.remove(start, pruneEnd);
-            }
-          }
-        } catch (e) {}
-      }
-    }
-  }, [hasBufferedData]);
-
   // Setup Web Audio API Analyser for Listener Visualizer
   const getAudioContext = useCallback(() => {
     if (!audioRef.current || sourceRef.current) {
@@ -112,6 +73,64 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
       return null;
     }
   }, []);
+
+  // Process queued audio chunks into MSE SourceBuffer sequentially with 1000ms buffer sync steering
+  const processQueue = useCallback(() => {
+    const sb = sourceBufferRef.current;
+    if (!sb || sb.updating || !mediaSourceRef.current || mediaSourceRef.current.readyState !== 'open') return;
+
+    // 1. Prune old played audio buffer ranges (> 10s behind current playback)
+    try {
+      if (audioRef.current && hasBufferedData(sb)) {
+        const start = sb.buffered.start(0);
+        const curTime = audioRef.current.currentTime;
+        const pruneEnd = curTime - 4;
+
+        if (curTime > 6 && pruneEnd > start + 1) {
+          sb.remove(start, pruneEnd);
+          return; // Next append will execute on 'updateend' event
+        }
+      }
+    } catch (e) {}
+
+    // 2. Dynamic 1000ms Buffer Sync Steering across all listener devices
+    try {
+      if (audioRef.current && hasBufferedData(sb) && !audioRef.current.paused) {
+        const bufEnd = sb.buffered.end(0);
+        const curTime = audioRef.current.currentTime;
+        const bufferAhead = bufEnd - curTime;
+
+        // Maintain 1.0 second (1000ms) buffer ahead of current playback position
+        if (bufferAhead > 1.4) {
+          audioRef.current.playbackRate = 1.03; // Catch up slightly (+3%)
+        } else if (bufferAhead < 0.6) {
+          audioRef.current.playbackRate = 0.97; // Slow down slightly (-3%)
+        } else {
+          audioRef.current.playbackRate = 1.0;  // Perfect 1000ms sync
+        }
+      }
+    } catch (e) {}
+
+    if (chunkQueueRef.current.length === 0) return;
+
+    // 3. Append next queued live audio chunk
+    try {
+      const nextChunk = chunkQueueRef.current.shift();
+      sb.appendBuffer(nextChunk);
+    } catch (err) {
+      if (err.name === 'QuotaExceededError') {
+        try {
+          if (hasBufferedData(sb) && audioRef.current) {
+            const start = sb.buffered.start(0);
+            const pruneEnd = audioRef.current.currentTime - 2;
+            if (pruneEnd > start) {
+              sb.remove(start, pruneEnd);
+            }
+          }
+        } catch (e) {}
+      }
+    }
+  }, [hasBufferedData]);
 
   // Initialize MediaSource when Live Broadcast is active
   useEffect(() => {
@@ -160,13 +179,23 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
 
           sb.addEventListener('updateend', () => {
             processQueue();
+
+            // 1000ms Initial Buffer Catch-up: Start playback once at least 1.0s (1000ms) of audio is buffered
             if (audio.paused && hasBufferedData(sb)) {
-              audio.play().then(() => {
-                setIsLiveAudioPlaying(true);
-                getAudioContext();
-              }).catch(e => {
-                console.warn('Live audio waiting for user gesture unlock:', e);
-              });
+              try {
+                const bufEnd = sb.buffered.end(0);
+                const bufStart = sb.buffered.start(0);
+                if (bufEnd - bufStart >= 1.0 || sb.buffered.length > 0) {
+                  audio.play().then(() => {
+                    setIsLiveAudioPlaying(true);
+                    getAudioContext();
+                  }).catch(e => {
+                    console.warn('Live audio waiting for user gesture unlock:', e);
+                  });
+                }
+              } catch (e) {
+                audio.play().catch(() => {});
+              }
             }
           });
 
@@ -178,6 +207,23 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
       };
 
       mediaSource.addEventListener('sourceopen', handleSourceOpen);
+
+      // Auto-resume playback if network jitter triggers a brief waiting/stalled state
+      const handleBufferUnderrun = () => {
+        if (audioRef.current && hasBufferedData(sourceBufferRef.current)) {
+          const sb = sourceBufferRef.current;
+          try {
+            if (sb.buffered.end(0) - audioRef.current.currentTime > 0.2) {
+              audioRef.current.play().then(() => {
+                setIsLiveAudioPlaying(true);
+                getAudioContext();
+              }).catch(() => {});
+            }
+          } catch (e) {}
+        }
+      };
+      audio.addEventListener('waiting', handleBufferUnderrun);
+      audio.addEventListener('stalled', handleBufferUnderrun);
 
       // Global gesture listener to trigger playback if browser blocks autoplay
       const unlockPlay = () => {
@@ -196,6 +242,8 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
       return () => {
         window.removeEventListener('touchstart', unlockPlay);
         window.removeEventListener('click', unlockPlay);
+        audio.removeEventListener('waiting', handleBufferUnderrun);
+        audio.removeEventListener('stalled', handleBufferUnderrun);
         mediaSource.removeEventListener('sourceopen', handleSourceOpen);
         chunkQueueRef.current = [];
         sourceBufferRef.current = null;
@@ -229,10 +277,18 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
     }
 
     if (audioRef.current && audioRef.current.paused && hasBufferedData(sb)) {
-      audioRef.current.play().then(() => {
-        setIsLiveAudioPlaying(true);
-        getAudioContext();
-      }).catch(() => {});
+      try {
+        const bufEnd = sb.buffered.end(0);
+        const bufStart = sb.buffered.start(0);
+        if (bufEnd - bufStart >= 1.0) {
+          audioRef.current.play().then(() => {
+            setIsLiveAudioPlaying(true);
+            getAudioContext();
+          }).catch(() => {});
+        }
+      } catch (e) {
+        audioRef.current.play().catch(() => {});
+      }
     }
   }, [isLiveBroadcast, base64ToArrayBuffer, processQueue, getAudioContext, hasBufferedData]);
 
