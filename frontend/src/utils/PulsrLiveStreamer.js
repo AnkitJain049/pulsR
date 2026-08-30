@@ -71,13 +71,12 @@ export class PulsrLiveStreamer {
     }
 
     try {
-      // Prompt Chrome / Edge / Firefox screen & tab picker with native local playback suppression enabled
+      // Prompt Chrome / Edge / Firefox screen & tab picker with system audio capture enabled
       const stream = await navigator.mediaDevices.getDisplayMedia({
         video: {
           displaySurface: 'browser'
         },
         audio: {
-          suppressLocalAudioPlayback: true, // Native Chrome WebRTC feature to mute local speaker playback while streaming 100% digital audio
           echoCancellation: false,
           noiseSuppression: false,
           autoGainControl: false

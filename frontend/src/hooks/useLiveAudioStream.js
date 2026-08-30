@@ -13,6 +13,7 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
   const chunkQueueRef = useRef([]);
   const audioCtxRef = useRef(null);
   const analyserRef = useRef(null);
+  const sourceRef = useRef(null);
 
   const [isLiveAudioPlaying, setIsLiveAudioPlaying] = useState(false);
   const [liveError, setLiveError] = useState(null);
@@ -43,25 +44,10 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
 
   // Setup Web Audio API Analyser for Listener Visualizer
   const getAudioContext = useCallback(() => {
-    if (!audioRef.current || analyserRef.current) return analyserRef.current;
-
-    try {
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      const ctx = new AudioCtx();
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 128;
-
-      const source = ctx.createMediaElementSource(audioRef.current);
-      source.connect(analyser);
-      analyser.connect(ctx.destination);
-
-      audioCtxRef.current = ctx;
-      analyserRef.current = analyser;
-      return analyser;
-    } catch (err) {
-      console.warn('Listener Web Audio API notice:', err);
-      return null;
+    if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+      audioCtxRef.current.resume().catch(() => {});
     }
+    return analyserRef.current;
   }, []);
 
   // Initialize MediaSource when Live Broadcast is active
@@ -73,6 +59,14 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
         audioRef.current.pause();
         audioRef.current.removeAttribute('src');
       }
+      if (audioCtxRef.current) {
+        try {
+          audioCtxRef.current.close();
+        } catch (e) {}
+        audioCtxRef.current = null;
+        analyserRef.current = null;
+        sourceRef.current = null;
+      }
       return;
     }
 
@@ -80,6 +74,24 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
     audio.crossOrigin = 'anonymous';
     audio.preload = 'auto';
     audioRef.current = audio;
+
+    // Immediately setup Web Audio Analyser Node on the audio element for visualizer
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      const ctx = new AudioCtx();
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 128;
+
+      const source = ctx.createMediaElementSource(audio);
+      source.connect(analyser);
+      analyser.connect(ctx.destination);
+
+      audioCtxRef.current = ctx;
+      analyserRef.current = analyser;
+      sourceRef.current = source;
+    } catch (err) {
+      console.warn('Listener Web Audio setup notice:', err);
+    }
 
     if (typeof MediaSource === 'undefined') {
       setLiveError('MediaSource Extensions (MSE) are not supported on this browser.');
@@ -96,10 +108,6 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
         const targetMime = (MediaSource.isTypeSupported(mime))
           ? mime
           : (MediaSource.isTypeSupported('audio/webm') ? 'audio/webm' : '');
-
-        if (!targetMime) {
-          console.warn('Fallback: Browser using default MediaSource codec');
-        }
 
         const sb = mediaSource.addSourceBuffer(targetMime || 'audio/webm');
         sourceBufferRef.current = sb;
@@ -144,6 +152,14 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
       chunkQueueRef.current = [];
       sourceBufferRef.current = null;
       mediaSourceRef.current = null;
+      if (audioCtxRef.current) {
+        try {
+          audioCtxRef.current.close();
+        } catch (e) {}
+        audioCtxRef.current = null;
+        analyserRef.current = null;
+        sourceRef.current = null;
+      }
       audio.pause();
       audio.removeAttribute('src');
     };
@@ -160,7 +176,14 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
     if (sb && !sb.updating) {
       processQueue();
     }
-  }, [isLiveBroadcast, base64ToArrayBuffer, processQueue]);
+
+    if (audioRef.current && audioRef.current.paused && sb && sb.buffered.length > 0) {
+      audioRef.current.play().then(() => {
+        setIsLiveAudioPlaying(true);
+        getAudioContext();
+      }).catch(() => {});
+    }
+  }, [isLiveBroadcast, base64ToArrayBuffer, processQueue, getAudioContext]);
 
   return {
     liveAudioRef: audioRef,
