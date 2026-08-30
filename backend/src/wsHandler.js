@@ -226,9 +226,9 @@ export function setupWebSocketHandler(wss) {
               }
             });
 
-            // Relay live audio chunk to all listener sockets in room
+            // Broadcast live audio chunk to all sockets in room (listeners + host monitoring)
             for (const clientSocket of room.clients.keys()) {
-              if (clientSocket !== socket && clientSocket.readyState === 1) {
+              if (clientSocket.readyState === 1) {
                 clientSocket.send(chunkMsg);
               }
             }
