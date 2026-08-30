@@ -238,12 +238,16 @@ export function useWebSocket() {
   }, [session.username]);
 
   const leaveRoom = useCallback(() => {
+    setRoomState(null);
+    setRole(null);
     if (socketRef.current?.readyState === WebSocket.OPEN) {
       socketRef.current.send(JSON.stringify({ type: 'LEAVE_ROOM' }));
     }
   }, []);
 
   const discardRoom = useCallback(() => {
+    setRoomState(null);
+    setRole(null);
     if (socketRef.current?.readyState === WebSocket.OPEN) {
       socketRef.current.send(JSON.stringify({ type: 'DISCARD_ROOM' }));
     }

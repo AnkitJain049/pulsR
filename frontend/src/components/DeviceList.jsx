@@ -1,19 +1,9 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { Smartphone, Crown, LogOut, Users, Trash2 } from 'lucide-react';
 
 export function DeviceList({ roomState, session, role, leaveRoom, discardRoom }) {
   const clients = roomState?.clients || [];
   const isAdmin = role === 'ADMIN' || role === 'admin';
-  const [showConfirm, setShowConfirm] = useState(false);
-
-  const handleDiscardClick = () => {
-    if (showConfirm) {
-      discardRoom();
-    } else {
-      setShowConfirm(true);
-      setTimeout(() => setShowConfirm(false), 4000);
-    }
-  };
 
   return (
     <div className="apple-glass rounded-3xl p-6 border border-white/10 h-full flex flex-col">
@@ -29,16 +19,12 @@ export function DeviceList({ roomState, session, role, leaveRoom, discardRoom })
 
         {isAdmin ? (
           <button
-            onClick={handleDiscardClick}
-            className={`flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-semibold transition border ${
-              showConfirm
-                ? 'bg-red-600 text-white border-red-500 shadow-red-500/50 animate-pulse'
-                : 'bg-red-500/10 text-red-400 border-red-500/20 hover:bg-red-500/20'
-            }`}
+            onClick={discardRoom}
+            className="flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition"
             title="Permanently delete room from MongoDB and kick all listeners"
           >
             <Trash2 className="w-3.5 h-3.5" />
-            <span>{showConfirm ? 'Confirm Discard?' : 'Discard Room'}</span>
+            <span>Discard Room</span>
           </button>
         ) : (
           <button
