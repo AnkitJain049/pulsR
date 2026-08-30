@@ -4,8 +4,8 @@ import { useEffect, useRef, useState, useCallback } from 'react';
  * useLiveAudioStream.js
  * Media Source Extensions (MSE) Live Audio Receiver Hook
  * Receives WebM Opus audio chunks over WebSockets and feeds them into HTML5 MediaSource SourceBuffer.
- * Implements Cristian's Algorithm Server Clock Synchronized Hard-Seek & Smooth Steering (< 5ms drift)
- * so all connected listener devices play in 100.0% sample-accurate sync.
+ * Implements Cristian's Algorithm Server Clock Synchronized Hard-Sync & Smooth Steering (< 5ms drift).
+ * Ensures Web Audio API AudioContext resumes explicitly on user interaction for tab refreshes.
  */
 export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;codecs=opus', serverTimeOffset = 0) {
   const audioRef = useRef(null);
@@ -44,37 +44,53 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
 
   // Setup Web Audio API Analyser for Listener Visualizer
   const getAudioContext = useCallback(() => {
-    if (!audioRef.current || sourceRef.current) {
+    if (!audioRef.current) return null;
+
+    try {
+      if (!audioCtxRef.current) {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        const ctx = new AudioCtx();
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 128;
+
+        const source = ctx.createMediaElementSource(audioRef.current);
+        source.connect(analyser);
+        analyser.connect(ctx.destination);
+
+        audioCtxRef.current = ctx;
+        analyserRef.current = analyser;
+        sourceRef.current = source;
+      }
+
       if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
         audioCtxRef.current.resume().catch(() => {});
       }
+
       return analyserRef.current;
-    }
-
-    try {
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      const ctx = new AudioCtx();
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 128;
-
-      const source = ctx.createMediaElementSource(audioRef.current);
-      source.connect(analyser);
-      analyser.connect(ctx.destination);
-
-      audioCtxRef.current = ctx;
-      analyserRef.current = analyser;
-      sourceRef.current = source;
-
-      if (ctx.state === 'suspended') {
-        ctx.resume().catch(() => {});
-      }
-
-      return analyser;
     } catch (err) {
       console.warn('Listener Web Audio setup notice:', err);
       return null;
     }
   }, []);
+
+  // Safe playback trigger with muted fallback on browser tab refresh
+  const triggerSafePlay = useCallback(() => {
+    const audio = audioRef.current;
+    const sb = sourceBufferRef.current;
+    if (!audio || !hasBufferedData(sb)) return;
+
+    audio.play().then(() => {
+      setIsLiveAudioPlaying(true);
+      getAudioContext();
+    }).catch(() => {
+      // Muted fallback for browser tab refresh (Chrome/Safari requirement)
+      audio.muted = true;
+      audio.play().then(() => {
+        setIsLiveAudioPlaying(true);
+        getAudioContext();
+      }).catch(() => {});
+    });
+  }, [hasBufferedData, getAudioContext]);
 
   // Process queued audio chunks into MSE SourceBuffer sequentially with Cristian's Algorithm Hard-Sync & Steering
   const processQueue = useCallback(() => {
@@ -190,12 +206,7 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
             processQueue();
 
             if (audio.paused && hasBufferedData(sb) && !playScheduledRef.current) {
-              audio.play().then(() => {
-                setIsLiveAudioPlaying(true);
-                getAudioContext();
-              }).catch(e => {
-                console.warn('Live audio waiting for user gesture unlock:', e);
-              });
+              triggerSafePlay();
             }
           });
 
@@ -214,10 +225,7 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
           const sb = sourceBufferRef.current;
           try {
             if (sb.buffered.end(0) - audioRef.current.currentTime > 0.1) {
-              audioRef.current.play().then(() => {
-                setIsLiveAudioPlaying(true);
-                getAudioContext();
-              }).catch(() => {});
+              triggerSafePlay();
             }
           } catch (e) {}
         }
@@ -225,23 +233,25 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
       audio.addEventListener('waiting', handleBufferUnderrun);
       audio.addEventListener('stalled', handleBufferUnderrun);
 
-      // Global gesture listener to trigger playback if browser blocks autoplay
+      // Global gesture listener: Unmute audio and explicitly resume AudioContext on ANY click/touch/keydown
       const unlockPlay = () => {
-        if (audioRef.current && audioRef.current.paused && hasBufferedData(sourceBufferRef.current)) {
-          audioRef.current.play().then(() => {
-            setIsLiveAudioPlaying(true);
-            getAudioContext();
-          }).catch(() => {});
-        } else if (audioRef.current && !audioRef.current.paused) {
-          getAudioContext();
+        if (audioRef.current) {
+          audioRef.current.muted = false;
+          audioRef.current.play().catch(() => {});
         }
+        if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+          audioCtxRef.current.resume().catch(() => {});
+        }
+        getAudioContext();
       };
       window.addEventListener('touchstart', unlockPlay, { passive: true });
       window.addEventListener('click', unlockPlay, { passive: true });
+      window.addEventListener('keydown', unlockPlay, { passive: true });
 
       return () => {
         window.removeEventListener('touchstart', unlockPlay);
         window.removeEventListener('click', unlockPlay);
+        window.removeEventListener('keydown', unlockPlay);
         audio.removeEventListener('waiting', handleBufferUnderrun);
         audio.removeEventListener('stalled', handleBufferUnderrun);
         mediaSource.removeEventListener('sourceopen', handleSourceOpen);
@@ -263,7 +273,7 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
     } catch (gErr) {
       console.error('Live stream setup exception:', gErr);
     }
-  }, [isLiveBroadcast, liveMimeType, processQueue, getAudioContext, hasBufferedData]);
+  }, [isLiveBroadcast, liveMimeType, processQueue, getAudioContext, hasBufferedData, triggerSafePlay]);
 
   // Handle incoming live chunk from WebSocket with Cristian's Algorithm Server Clock Scheduling
   const handleLiveChunk = useCallback((chunkPayload) => {
@@ -297,10 +307,7 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
           playScheduledRef.current = true;
           setTimeout(() => {
             if (audioRef.current && hasBufferedData(sourceBufferRef.current)) {
-              audioRef.current.play().then(() => {
-                setIsLiveAudioPlaying(true);
-                getAudioContext();
-              }).catch(() => {});
+              triggerSafePlay();
             }
             playScheduledRef.current = false;
           }, timeUntilStartMs);
@@ -308,13 +315,10 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
         }
       }
 
-      // Default immediate trigger if target time already elapsed
-      audioRef.current.play().then(() => {
-        setIsLiveAudioPlaying(true);
-        getAudioContext();
-      }).catch(() => {});
+      // Default trigger if target time already elapsed
+      triggerSafePlay();
     }
-  }, [isLiveBroadcast, base64ToArrayBuffer, processQueue, getAudioContext, hasBufferedData, serverTimeOffset]);
+  }, [isLiveBroadcast, base64ToArrayBuffer, processQueue, hasBufferedData, serverTimeOffset, triggerSafePlay]);
 
   return {
     liveAudioRef: audioRef,
