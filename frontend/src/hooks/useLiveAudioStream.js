@@ -5,7 +5,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
  * Media Source Extensions (MSE) Live Audio Receiver Hook
  * Receives WebM Opus audio chunks over WebSockets and feeds them into HTML5 MediaSource SourceBuffer.
  * Connects Web Audio AnalyserNode to the Audio element for listener speaker output and visualizer analysis.
- * Includes automatic buffer pruning to prevent QuotaExceededError and buffer exhaustion.
+ * Includes automatic buffer pruning with strict timestamp guards to prevent QuotaExceededError and buffer exhaustion.
  */
 export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;codecs=opus') {
   const audioRef = useRef(null);
@@ -45,13 +45,15 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
     const sb = sourceBufferRef.current;
     if (!sb || sb.updating || !mediaSourceRef.current || mediaSourceRef.current.readyState !== 'open') return;
 
-    // 1. Prune old played audio buffer ranges (> 10s behind current playback) to prevent memory exhaustion
+    // 1. Prune old played audio buffer ranges (> 10s behind current playback) with strict positive timestamp guards
     try {
       if (audioRef.current && hasBufferedData(sb)) {
         const start = sb.buffered.start(0);
         const curTime = audioRef.current.currentTime;
-        if (curTime - start > 10) {
-          sb.remove(start, curTime - 4);
+        const pruneEnd = curTime - 4;
+
+        if (curTime > 6 && pruneEnd > start + 1) {
+          sb.remove(start, pruneEnd);
           return; // Next append will execute on 'updateend' event
         }
       }
@@ -66,8 +68,12 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
     } catch (err) {
       if (err.name === 'QuotaExceededError') {
         try {
-          if (hasBufferedData(sb)) {
-            sb.remove(sb.buffered.start(0), audioRef.current.currentTime - 2);
+          if (hasBufferedData(sb) && audioRef.current) {
+            const start = sb.buffered.start(0);
+            const pruneEnd = audioRef.current.currentTime - 2;
+            if (pruneEnd > start) {
+              sb.remove(start, pruneEnd);
+            }
           }
         } catch (e) {}
       }
