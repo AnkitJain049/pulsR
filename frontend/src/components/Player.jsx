@@ -173,9 +173,23 @@ export function Player({
         >
           <div className="flex items-center space-x-2">
             <AlertCircle className="w-4 h-4" />
-            <span>Tap Anywhere or Click Here to Enable Live Audio Stream</span>
+            <span>Tap Anywhere or Click Here to Enable Audio Stream</span>
           </div>
           <span className="px-4 py-1.5 rounded-xl bg-[#c1ff72] text-black text-xs font-extrabold shadow-lime-glow">Enable Sound</span>
+        </div>
+      )}
+
+      {/* LIVE BROADCAST UNLOCK OVERLAY FOR LISTENERS */}
+      {(!isAdmin && isRoomLive) && (
+        <div
+          onClick={manualResync}
+          className="cursor-pointer p-4 rounded-2xl bg-red-600/20 border border-red-500/40 text-red-400 text-sm font-semibold flex items-center justify-between animate-pulse shadow-lg shadow-red-500/10"
+        >
+          <div className="flex items-center space-x-2">
+            <Radio className="w-4 h-4 animate-pulse" />
+            <span>Tap Anywhere or Click Here to Connect Live Spotify Audio & Visualizer</span>
+          </div>
+          <span className="px-4 py-1.5 rounded-xl bg-red-600 text-white text-xs font-extrabold shadow-red-500/30">Connect Sound</span>
         </div>
       )}
 
@@ -324,7 +338,7 @@ export function Player({
                     </div>
 
                     <p className="text-[11px] text-zinc-400 leading-relaxed">
-                      💡 <strong className="text-white">Note on Audio Capture:</strong> Keep the volume slider inside Apple Music / Spotify app up so Chrome can capture the digital stream! Chrome automatically mutes local speaker playback (`suppressLocalAudioPlayback`), or you can enable <strong>Host Speaker Monitoring</strong> above to play synced room sound through your laptop!
+                      💡 <strong className="text-white">Note:</strong> You hear Spotify directly from your desktop app. Listeners in the room hear your stream in real time!
                     </p>
                   </div>
                 )}
