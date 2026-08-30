@@ -125,6 +125,18 @@ export function setupWebSocketHandler(wss) {
               }
             }));
 
+            // If room has an active live broadcast, send the cached WebM header chunk #0 to initialize joining listener decoder
+            if (room.isLiveBroadcast && room.liveHeaderChunk) {
+              socket.send(JSON.stringify({
+                type: 'LIVE_AUDIO_CHUNK',
+                payload: {
+                  chunk: room.liveHeaderChunk,
+                  mimeType: room.liveMimeType,
+                  timestamp: Date.now()
+                }
+              }));
+            }
+
             // 2. Broadcast PEERS_UPDATE & ROOM_STATE to all room members
             broadcastRoomState(room);
             break;
@@ -194,6 +206,7 @@ export function setupWebSocketHandler(wss) {
             }
 
             room.isLiveBroadcast = true;
+            room.liveHeaderChunk = null; // Reset header chunk on fresh broadcast
             room.liveMimeType = payload?.mimeType || 'audio/webm;codecs=opus';
             room.playback.isPlaying = false; // Pause static track when live broadcast is active
 
@@ -216,6 +229,11 @@ export function setupWebSocketHandler(wss) {
 
             const clientData = room.clients.get(socket);
             if (clientData?.role !== 'ADMIN' && clientData?.role !== 'admin') break;
+
+            // Cache the initial WebM Header Chunk #0 for mid-stream joining listeners
+            if (!room.liveHeaderChunk && payload.chunk) {
+              room.liveHeaderChunk = payload.chunk;
+            }
 
             const chunkMsg = JSON.stringify({
               type: 'LIVE_AUDIO_CHUNK',
@@ -241,6 +259,7 @@ export function setupWebSocketHandler(wss) {
             if (!room) break;
 
             room.isLiveBroadcast = false;
+            room.liveHeaderChunk = null;
 
             broadcastToRoom(room, {
               type: 'LIVE_BROADCAST_STOPPED'
