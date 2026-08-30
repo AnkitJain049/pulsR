@@ -4,8 +4,8 @@ import { useEffect, useRef, useState, useCallback } from 'react';
  * useLiveAudioStream.js
  * Media Source Extensions (MSE) Live Audio Receiver Hook
  * Receives WebM Opus audio chunks over WebSockets and feeds them into HTML5 MediaSource SourceBuffer.
- * Implements Cristian's Algorithm Server Clock Synchronized Hard-Seek & Smooth Steering (< 5ms drift)
- * so all connected listener devices play in 100.0% sample-accurate sync.
+ * Implements Cristian's Algorithm Server Clock Synchronized Hard-Sync & Smooth Steering (< 5ms drift).
+ * Uses Muted Autoplay Fallback so stream buffer builds instantly even before user gesture unlock.
  */
 export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;codecs=opus', serverTimeOffset = 0) {
   const audioRef = useRef(null);
@@ -75,6 +75,26 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
       return null;
     }
   }, []);
+
+  // Safe playback trigger with muted fallback if browser blocks unmuted autoplay
+  const triggerAudioPlay = useCallback(() => {
+    const audio = audioRef.current;
+    const sb = sourceBufferRef.current;
+    if (!audio || !hasBufferedData(sb)) return;
+
+    // Try unmuted playback first
+    audio.play().then(() => {
+      setIsLiveAudioPlaying(true);
+      getAudioContext();
+    }).catch((err) => {
+      // If browser blocks unmuted autoplay, play muted first so buffer timeline builds cleanly
+      audio.muted = true;
+      audio.play().then(() => {
+        setIsLiveAudioPlaying(true);
+        getAudioContext();
+      }).catch(() => {});
+    });
+  }, [hasBufferedData, getAudioContext]);
 
   // Process queued audio chunks into MSE SourceBuffer sequentially with Cristian's Algorithm Hard-Sync & Steering
   const processQueue = useCallback(() => {
@@ -190,12 +210,7 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
             processQueue();
 
             if (audio.paused && hasBufferedData(sb) && !playScheduledRef.current) {
-              audio.play().then(() => {
-                setIsLiveAudioPlaying(true);
-                getAudioContext();
-              }).catch(e => {
-                console.warn('Live audio waiting for user gesture unlock:', e);
-              });
+              triggerAudioPlay();
             }
           });
 
@@ -214,10 +229,7 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
           const sb = sourceBufferRef.current;
           try {
             if (sb.buffered.end(0) - audioRef.current.currentTime > 0.1) {
-              audioRef.current.play().then(() => {
-                setIsLiveAudioPlaying(true);
-                getAudioContext();
-              }).catch(() => {});
+              triggerAudioPlay();
             }
           } catch (e) {}
         }
@@ -225,23 +237,24 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
       audio.addEventListener('waiting', handleBufferUnderrun);
       audio.addEventListener('stalled', handleBufferUnderrun);
 
-      // Global gesture listener to trigger playback if browser blocks autoplay
-      const unlockPlay = () => {
-        if (audioRef.current && audioRef.current.paused && hasBufferedData(sourceBufferRef.current)) {
-          audioRef.current.play().then(() => {
-            setIsLiveAudioPlaying(true);
-            getAudioContext();
-          }).catch(() => {});
-        } else if (audioRef.current && !audioRef.current.paused) {
-          getAudioContext();
+      // Global user gesture listener: Immediately unmute and play on ANY user interaction on the window
+      const unlockAudioGesture = () => {
+        if (audioRef.current) {
+          audioRef.current.muted = false;
+          if (audioRef.current.paused && hasBufferedData(sourceBufferRef.current)) {
+            triggerAudioPlay();
+          }
         }
+        getAudioContext();
       };
-      window.addEventListener('touchstart', unlockPlay, { passive: true });
-      window.addEventListener('click', unlockPlay, { passive: true });
+      window.addEventListener('touchstart', unlockAudioGesture, { passive: true });
+      window.addEventListener('click', unlockAudioGesture, { passive: true });
+      window.addEventListener('keydown', unlockAudioGesture, { passive: true });
 
       return () => {
-        window.removeEventListener('touchstart', unlockPlay);
-        window.removeEventListener('click', unlockPlay);
+        window.removeEventListener('touchstart', unlockAudioGesture);
+        window.removeEventListener('click', unlockAudioGesture);
+        window.removeEventListener('keydown', unlockAudioGesture);
         audio.removeEventListener('waiting', handleBufferUnderrun);
         audio.removeEventListener('stalled', handleBufferUnderrun);
         mediaSource.removeEventListener('sourceopen', handleSourceOpen);
@@ -263,7 +276,7 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
     } catch (gErr) {
       console.error('Live stream setup exception:', gErr);
     }
-  }, [isLiveBroadcast, liveMimeType, processQueue, getAudioContext, hasBufferedData]);
+  }, [isLiveBroadcast, liveMimeType, processQueue, getAudioContext, hasBufferedData, triggerAudioPlay]);
 
   // Handle incoming live chunk from WebSocket with Cristian's Algorithm Server Clock Scheduling
   const handleLiveChunk = useCallback((chunkPayload) => {
@@ -297,10 +310,7 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
           playScheduledRef.current = true;
           setTimeout(() => {
             if (audioRef.current && hasBufferedData(sourceBufferRef.current)) {
-              audioRef.current.play().then(() => {
-                setIsLiveAudioPlaying(true);
-                getAudioContext();
-              }).catch(() => {});
+              triggerAudioPlay();
             }
             playScheduledRef.current = false;
           }, timeUntilStartMs);
@@ -308,13 +318,10 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
         }
       }
 
-      // Default immediate trigger if target time already elapsed
-      audioRef.current.play().then(() => {
-        setIsLiveAudioPlaying(true);
-        getAudioContext();
-      }).catch(() => {});
+      // Default trigger if target time already elapsed
+      triggerAudioPlay();
     }
-  }, [isLiveBroadcast, base64ToArrayBuffer, processQueue, getAudioContext, hasBufferedData, serverTimeOffset]);
+  }, [isLiveBroadcast, base64ToArrayBuffer, processQueue, hasBufferedData, serverTimeOffset, triggerAudioPlay]);
 
   return {
     liveAudioRef: audioRef,
