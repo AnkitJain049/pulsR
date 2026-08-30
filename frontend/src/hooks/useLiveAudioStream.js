@@ -4,7 +4,8 @@ import { useEffect, useRef, useState, useCallback } from 'react';
  * useLiveAudioStream.js
  * Media Source Extensions (MSE) Live Audio Receiver Hook
  * Receives WebM Opus audio chunks over WebSockets and feeds them into HTML5 MediaSource SourceBuffer.
- * Implements smooth sample-accurate sync and automatic buffer pruning to prevent memory leaks.
+ * Implements Stream-Tip Catch-Up Sync (audio.currentTime = bufEnd - 0.3s) so all listeners stay locked
+ * to the exact same live stream position and resume immediately on page refresh.
  */
 export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;codecs=opus', serverTimeOffset = 0) {
   const audioRef = useRef(null);
@@ -73,11 +74,21 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
     }
   }, []);
 
-  // Safe playback trigger
+  // Safe playback trigger with stream-tip alignment
   const triggerAudioPlay = useCallback(() => {
     const audio = audioRef.current;
     const sb = sourceBufferRef.current;
     if (!audio || !hasBufferedData(sb)) return;
+
+    try {
+      const bufEnd = sb.buffered.end(0);
+      const curTime = audio.currentTime;
+
+      // Align playback position to stream tip (0.3s behind live buffer end)
+      if (bufEnd - curTime > 0.5 || curTime < sb.buffered.start(0)) {
+        audio.currentTime = Math.max(sb.buffered.start(0), bufEnd - 0.3);
+      }
+    } catch (e) {}
 
     audio.play().then(() => {
       setIsLiveAudioPlaying(true);
@@ -92,7 +103,7 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
     });
   }, [hasBufferedData, getAudioContext]);
 
-  // Process queued audio chunks into MSE SourceBuffer sequentially
+  // Process queued audio chunks into MSE SourceBuffer sequentially with stream-tip sync steering
   const processQueue = useCallback(() => {
     const sb = sourceBufferRef.current;
     if (!sb || sb.updating || !mediaSourceRef.current || mediaSourceRef.current.readyState !== 'open') return;
@@ -111,17 +122,18 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
       }
     } catch (e) {}
 
-    // 2. Playback rate sync steering
+    // 2. Stream-Tip Catch-Up Sync: Align currentTime to live stream tip (bufEnd - 0.3s)
     try {
-      if (audioRef.current && hasBufferedData(sb) && !audioRef.current.paused) {
+      if (audioRef.current && hasBufferedData(sb)) {
         const bufEnd = sb.buffered.end(0);
         const curTime = audioRef.current.currentTime;
-        const bufferAhead = bufEnd - curTime;
+        const lagSec = bufEnd - curTime;
 
-        if (bufferAhead > 1.5) {
-          audioRef.current.playbackRate = 1.03;
-        } else if (bufferAhead < 0.4) {
-          audioRef.current.playbackRate = 0.97;
+        // Hard catch-up seek if listener is lagging by > 0.5s
+        if (lagSec > 0.5) {
+          audioRef.current.currentTime = Math.max(sb.buffered.start(0), bufEnd - 0.3);
+        } else if (lagSec > 0.2) {
+          audioRef.current.playbackRate = 1.04; // Catch up slightly (+4%)
         } else {
           audioRef.current.playbackRate = 1.0;
         }
@@ -197,12 +209,12 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
 
           sb.addEventListener('updateend', () => {
             processQueue();
-
-            if (audio.paused && hasBufferedData(sb)) {
+            if (hasBufferedData(sb)) {
               triggerAudioPlay();
             }
           });
 
+          // Process queued chunks (including Chunk #0 sent on refresh/join)
           processQueue();
         } catch (err) {
           console.error('Failed to create SourceBuffer:', err);
@@ -212,7 +224,7 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
 
       mediaSource.addEventListener('sourceopen', handleSourceOpen);
 
-      // Auto-resume playback if network jitter triggers a brief waiting/stalled state
+      // Auto-resume playback on waiting or stalled event
       const handleBufferUnderrun = () => {
         if (audioRef.current && hasBufferedData(sourceBufferRef.current)) {
           triggerAudioPlay();
@@ -221,11 +233,11 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
       audio.addEventListener('waiting', handleBufferUnderrun);
       audio.addEventListener('stalled', handleBufferUnderrun);
 
-      // Global user gesture listener: Immediately unmute and play on ANY user interaction on the window
+      // Global user gesture listener to unmute and play on click/touch/keydown
       const unlockAudioGesture = () => {
         if (audioRef.current) {
           audioRef.current.muted = false;
-          if (audioRef.current.paused && hasBufferedData(sourceBufferRef.current)) {
+          if (hasBufferedData(sourceBufferRef.current)) {
             triggerAudioPlay();
           }
         }
@@ -276,7 +288,7 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
       processQueue();
     }
 
-    if (audioRef.current && audioRef.current.paused && hasBufferedData(sb)) {
+    if (audioRef.current && hasBufferedData(sb)) {
       triggerAudioPlay();
     }
   }, [isLiveBroadcast, base64ToArrayBuffer, processQueue, hasBufferedData, triggerAudioPlay]);
