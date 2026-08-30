@@ -265,7 +265,8 @@ export function useWebSocket() {
   // Actions
   const createRoom = useCallback((customUsername) => {
     if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) return;
-    const activeUsername = customUsername || session.username || getStoredUsername();
+    const usernameStr = typeof customUsername === 'string' ? customUsername : '';
+    const activeUsername = usernameStr.trim() || session.username || getStoredUsername();
     if (activeUsername) {
       localStorage.setItem('pulsr_username', activeUsername);
     }
@@ -280,15 +281,18 @@ export function useWebSocket() {
 
   const joinRoom = useCallback((roomId, customUsername) => {
     if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN || !roomId) return;
-    const activeUsername = customUsername || session.username || getStoredUsername();
+    const usernameStr = typeof customUsername === 'string' ? customUsername : '';
+    const activeUsername = usernameStr.trim() || session.username || getStoredUsername();
     if (activeUsername) {
       localStorage.setItem('pulsr_username', activeUsername);
     }
-    localStorage.setItem('pulsr_active_room', roomId.trim().toUpperCase());
+    if (typeof roomId === 'string') {
+      localStorage.setItem('pulsr_active_room', roomId.trim().toUpperCase());
+    }
     socketRef.current.send(JSON.stringify({
       type: 'JOIN_ROOM',
       payload: {
-        roomId: roomId.trim().toUpperCase(),
+        roomId: String(roomId).trim().toUpperCase(),
         sessionId: session.sessionId,
         username: activeUsername
       }
@@ -348,7 +352,7 @@ export function useWebSocket() {
   }, []);
 
   const updateProfile = useCallback((newUsername) => {
-    if (!newUsername) return;
+    if (!newUsername || typeof newUsername !== 'string') return;
     const cleanUsername = newUsername.trim();
     localStorage.setItem('pulsr_username', cleanUsername);
     setSession(prev => ({ ...prev, username: cleanUsername }));

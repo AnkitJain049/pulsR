@@ -62,7 +62,7 @@ export function RoomJoin({ session, createRoom, joinRoom, updateProfile, error }
         
         {/* Create Room Button */}
         <button
-          onClick={createRoom}
+          onClick={() => createRoom()}
           className="w-full p-6 rounded-3xl bg-[#c1ff72] text-black font-extrabold text-lg hover:bg-lime-glow transition flex items-center justify-between shadow-lime-glow group"
         >
           <div className="flex items-center space-x-3">
