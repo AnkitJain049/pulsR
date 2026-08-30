@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
  * Media Source Extensions (MSE) Live Audio Receiver Hook
  * Receives WebM Opus audio chunks over WebSockets and feeds them into HTML5 MediaSource SourceBuffer.
  * Connects Web Audio AnalyserNode to the Audio element for listener speaker output and visualizer analysis.
+ * Includes automatic buffer pruning to prevent QuotaExceededError and buffer exhaustion.
  */
 export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;codecs=opus') {
   const audioRef = useRef(null);
@@ -39,18 +40,39 @@ export function useLiveAudioStream(isLiveBroadcast, liveMimeType = 'audio/webm;c
     return bytes.buffer;
   }, []);
 
-  // Process queued audio chunks into MSE SourceBuffer sequentially
+  // Process queued audio chunks into MSE SourceBuffer sequentially with automatic pruning
   const processQueue = useCallback(() => {
     const sb = sourceBufferRef.current;
-    if (!sb || sb.updating || chunkQueueRef.current.length === 0 || !mediaSourceRef.current || mediaSourceRef.current.readyState !== 'open') return;
+    if (!sb || sb.updating || !mediaSourceRef.current || mediaSourceRef.current.readyState !== 'open') return;
 
+    // 1. Prune old played audio buffer ranges (> 10s behind current playback) to prevent memory exhaustion
+    try {
+      if (audioRef.current && hasBufferedData(sb)) {
+        const start = sb.buffered.start(0);
+        const curTime = audioRef.current.currentTime;
+        if (curTime - start > 10) {
+          sb.remove(start, curTime - 4);
+          return; // Next append will execute on 'updateend' event
+        }
+      }
+    } catch (e) {}
+
+    if (chunkQueueRef.current.length === 0) return;
+
+    // 2. Append next queued live audio chunk
     try {
       const nextChunk = chunkQueueRef.current.shift();
       sb.appendBuffer(nextChunk);
     } catch (err) {
-      // Suppress minor buffer boundary notices
+      if (err.name === 'QuotaExceededError') {
+        try {
+          if (hasBufferedData(sb)) {
+            sb.remove(sb.buffered.start(0), audioRef.current.currentTime - 2);
+          }
+        } catch (e) {}
+      }
     }
-  }, []);
+  }, [hasBufferedData]);
 
   // Setup Web Audio API Analyser for Listener Visualizer
   const getAudioContext = useCallback(() => {
